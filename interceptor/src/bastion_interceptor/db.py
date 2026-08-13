@@ -166,12 +166,18 @@ class Database:
         assert record is not None
         return record
 
-    async def activate_policy(self, policy_id: UUID) -> asyncpg.Record | None:
+    async def activate_policy(self, policy_id: UUID, org_id: UUID) -> asyncpg.Record | None:
         """Deactivates every other version in the same policy_set_id, then
         activates this one, atomically — the partial unique index on
-        policies(policy_set_id) WHERE active is the DB-level backstop."""
+        policies(policy_set_id) WHERE active is the DB-level backstop.
+
+        org_id is checked *before* anything is mutated (not just filtered
+        from the response afterward) — a caller from a different org must
+        get a no-op, not a real activation they're then merely not shown."""
         async with self.pool.acquire() as conn, conn.transaction():
-            target = await conn.fetchrow("SELECT * FROM policies WHERE id = $1", policy_id)
+            target = await conn.fetchrow(
+                "SELECT * FROM policies WHERE id = $1 AND org_id = $2", policy_id, org_id
+            )
             if target is None:
                 return None
             await conn.execute(
@@ -186,15 +192,21 @@ class Database:
     # -- Approvals (Phase 3) --------------------------------------------
 
     async def get_span_lineage(self, span_id: UUID) -> asyncpg.Record | None:
-        """parent_span_id + agent_id from this span's CallAttempted event —
-        every span has exactly one. Used to authorize GET /approvals/{id}
-        (agent match) and to correctly link ApprovalGranted/ApprovalDenied
-        follow-up events into the same causal graph position."""
+        """parent_span_id + agent_id (+ that agent's org_id) from this
+        span's CallAttempted event — every span has exactly one. Used to
+        authorize GET /approvals/{id} (agent match) and approve/deny (org
+        match, Phase 5), and to correctly link ApprovalGranted/
+        ApprovalDenied follow-up events into the same causal graph
+        position."""
         return cast(
             "asyncpg.Record | None",
             await self.pool.fetchrow(
-                "SELECT parent_span_id, agent_id FROM events "
-                "WHERE span_id = $1 AND event_type = 'CallAttempted'",
+                """
+                SELECT e.parent_span_id, e.agent_id, a.org_id
+                FROM events e
+                JOIN agents a ON a.id = e.agent_id
+                WHERE e.span_id = $1 AND e.event_type = 'CallAttempted'
+                """,
                 span_id,
             ),
         )
@@ -237,23 +249,31 @@ class Database:
         )
 
     async def resolve_approval(
-        self, approval_id: UUID, *, status: str, resolved_by: UUID | None
+        self, approval_id: UUID, *, status: str, resolved_by: UUID | None, org_id: UUID
     ) -> asyncpg.Record | None:
-        """Only transitions a *pending* request — the WHERE guard makes
-        double-resolution (two approvers racing) a no-op for the loser
-        rather than silently overwriting who actually resolved it."""
+        """Only transitions a *pending* request belonging to `org_id` — both
+        guards are in the one atomic UPDATE (not a separate check-then-act),
+        so double-resolution (two approvers racing) and a cross-org
+        approval_id are both a clean no-op, never a real mutation that's
+        merely hidden from the response afterward (same reasoning as
+        activate_policy's org check)."""
         return cast(
             "asyncpg.Record | None",
             await self.pool.fetchrow(
                 """
-                UPDATE approval_requests
+                UPDATE approval_requests ar
                 SET status = $2, resolved_by = $3, resolved_at = now()
-                WHERE id = $1 AND status = 'pending'
-                RETURNING *
+                FROM events e
+                JOIN agents a ON a.id = e.agent_id
+                WHERE ar.id = $1 AND ar.status = 'pending'
+                  AND e.span_id = ar.span_id AND e.event_type = 'CallAttempted'
+                  AND a.org_id = $4
+                RETURNING ar.*
                 """,
                 approval_id,
                 status,
                 resolved_by,
+                org_id,
             ),
         )
 
@@ -272,6 +292,89 @@ class Database:
                 org_id,
             ),
         )
+
+    # -- Human auth (Phase 5) --------------------------------------------
+
+    async def get_user_by_email(self, email: str) -> asyncpg.Record | None:
+        return cast(
+            "asyncpg.Record | None",
+            await self.pool.fetchrow("SELECT * FROM users WHERE email = $1", email),
+        )
+
+    async def get_user_by_id(self, user_id: UUID) -> asyncpg.Record | None:
+        return cast(
+            "asyncpg.Record | None",
+            await self.pool.fetchrow("SELECT * FROM users WHERE id = $1", user_id),
+        )
+
+    async def insert_refresh_token(
+        self, *, user_id: UUID, token_hash: str, family_id: UUID, expires_at: Any
+    ) -> asyncpg.Record:
+        record = await self.pool.fetchrow(
+            """
+            INSERT INTO refresh_tokens (user_id, token_hash, family_id, expires_at)
+            VALUES ($1, $2, $3, $4)
+            RETURNING *
+            """,
+            user_id,
+            token_hash,
+            family_id,
+            expires_at,
+        )
+        assert record is not None
+        return record
+
+    async def get_refresh_token_by_hash(self, token_hash: str) -> asyncpg.Record | None:
+        return cast(
+            "asyncpg.Record | None",
+            await self.pool.fetchrow(
+                "SELECT * FROM refresh_tokens WHERE token_hash = $1", token_hash
+            ),
+        )
+
+    async def revoke_refresh_token(self, token_id: UUID, conn: asyncpg.Connection) -> None:
+        await conn.execute("UPDATE refresh_tokens SET revoked_at = now() WHERE id = $1", token_id)
+
+    async def revoke_refresh_token_family(
+        self, family_id: UUID, conn: asyncpg.Connection | None = None
+    ) -> None:
+        """The actual reuse-detection mechanism (AUTH.md §2): revokes every
+        token ever issued in this login session, not just the one presented.
+        `conn` lets the caller run this inside an existing transaction
+        (rotation) or standalone (logout)."""
+        executor = conn if conn is not None else self.pool
+        await executor.execute(
+            "UPDATE refresh_tokens SET revoked_at = now() "
+            "WHERE family_id = $1 AND revoked_at IS NULL",
+            family_id,
+        )
+
+    async def rotate_refresh_token(
+        self,
+        *,
+        old_token_id: UUID,
+        user_id: UUID,
+        family_id: UUID,
+        new_token_hash: str,
+        expires_at: Any,
+    ) -> asyncpg.Record:
+        """Atomically revokes the presented (now-consumed) token and issues
+        its replacement in the same family — one-time-use rotation."""
+        async with self.pool.acquire() as conn, conn.transaction():
+            await self.revoke_refresh_token(old_token_id, conn)
+            record = await conn.fetchrow(
+                """
+                INSERT INTO refresh_tokens (user_id, token_hash, family_id, expires_at)
+                VALUES ($1, $2, $3, $4)
+                RETURNING *
+                """,
+                user_id,
+                new_token_hash,
+                family_id,
+                expires_at,
+            )
+        assert record is not None
+        return record
 
 
 db = Database()

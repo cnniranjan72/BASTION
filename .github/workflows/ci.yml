@@ -42,7 +42,11 @@ jobs:
           version: '0.11.30'
           enable-cache: true
       - run: uv python install 3.11
-      - run: uv sync --all-packages --dev
+      # --all-extras is required, not optional: each package's own test deps
+      # (pytest, httpx, ...) live in [project.optional-dependencies], which
+      # --dev alone (root [dependency-groups], ruff/mypy only) does not pull in.
+      - run: uv sync --all-packages --all-extras --dev
+      - run: uv run python infra/keys/generate_dev_keys.py
       - run: uv run ruff check .
       - run: uv run ruff format --check .
       - run: uv run mypy shared/src interceptor/src aggregator/src sdk-python/bastion

@@ -1,7 +1,7 @@
 # BASTION — Progress Log
 
-## Status: Phase 4 complete
-Phase: 4 (trace aggregator + replay API) → next up: Phase 5 (auth)
+## Status: Phase 5 complete
+Phase: 5 (auth) → next up: Phase 6 (live WebSocket fan-out)
 
 ## Log
 - [2026-08-14] Project specced out (PRD, ARCHITECTURE, DATA_MODEL, AUTH, API_SPEC, BUILD_PLAN written). No code yet.
@@ -200,26 +200,61 @@ Phase: 4 (trace aggregator + replay API) → next up: Phase 5 (auth)
     explicit rather than relying on `uv sync --all-packages` installing everything incidentally.
     Full 28-test workspace suite passes, `ruff`/`mypy --strict` clean.
 
+- [2026-08-14] Phase 5 complete:
+  - `users` + `refresh_tokens` tables per DATA_MODEL.md exactly (migration `0005_users_auth.sql`),
+    plus the deferred `approval_requests.resolved_by → users(id)` FK from Phase 3.
+  - Ed25519 keypair (`infra/keys/generate_dev_keys.py`, idempotent, gitignored `*.pem`) — JWT access
+    tokens signed with the private key (interceptor only), verified with the public key (both
+    interceptor and aggregator, independently — AUTH.md's "without calling the auth service"). Access
+    tokens are 15 min, stateless; no denylist/instant-revocation cache built (AUTH.md's own documented
+    tradeoff, noted explicitly in `shared/src/bastion_shared/jwt_auth.py` rather than left implicit).
+  - argon2id passwords (`argon2-cffi`) for humans, kept deliberately separate from agents' SHA-256 API
+    key hashing (`interceptor/.../human_auth.py` vs `.../auth.py`) — AUTH.md §"two separate auth
+    domains, don't conflate them."
+  - **Refresh rotation + reuse detection** (`POST /auth/refresh`): every refresh token is one-time-use;
+    presenting an already-revoked one (whether legitimately rotated away or previously flagged) revokes
+    the *entire* family and forces re-login. `POST /auth/logout` does the same revocation on demand.
+  - RBAC (`require_role`) retrofitted onto every dashboard/trace/policy/approval endpoint; org scoping
+    now derives from JWT claims, replacing the Phase 2-4 explicit `org_id` param stopgap everywhere
+    (`/policies`, `/approvals`, `/traces`). A cross-org resource 404s, never a distinguishable 403.
+  - **Fixed a real bug found while retrofitting**: `activate_policy` was activating the target row
+    *before* checking org ownership, then merely filtering the response — a cross-org caller could
+    have actually flipped another org's active policy version even though they'd see a 404. Fixed by
+    moving the org check into the same atomic `UPDATE ... WHERE ... AND org_id = $2` (and the
+    equivalent join-based check for `resolve_approval`) — check-before-mutate, not mutate-then-hide.
+  - `POST /policies/{id}/approve`/`/deny` now populate `resolved_by` from the authenticated user (was
+    always `null` through Phase 3-4, documented then as pending exactly this).
+  - Approver page (`GET /approvals-ui`) updated with a pasted-access-token field (no login form — that
+    stays Phase 7's job) since its API calls now require real auth.
+  - **Milestone test passes** (`test_refresh_token_reuse_revokes_entire_family`): simulates the actual
+    theft scenario — an attacker rotates a stolen token, then the legitimate client's stale copy gets
+    presented too; asserts the reuse is detected *and* that the token the attacker just legitimately
+    obtained is also dead afterward, not just the stale replay rejected. 11 new auth tests total
+    (login, refresh happy-path, reuse detection, logout, RBAC, missing/malformed tokens); every
+    existing Phase 2-4 test that used the explicit `org_id` param was migrated to real login+JWT
+    headers. Full 39-test workspace suite passes, `ruff`/`mypy --strict` clean.
+  - **Also fixed**: CI's `uv sync --all-packages --dev` was missing `--all-extras`, so it never
+    actually installed `pytest`/`httpx`/etc. (each package's own `[project.optional-dependencies]`) —
+    this had been silently wrong since Phase 0 and would have failed CI's first real run. Added the
+    missing flag plus a `generate_dev_keys.py` step.
+
 ## Next up
-- Phase 5: proper auth per AUTH.md — argon2id, JWT access tokens (asymmetric signing), refresh token
-  rotation with family-based reuse detection, RBAC middleware. Retrofit onto every dashboard/trace/
-  policy/approval endpoint (all currently open, explicit-`org_id` stopgaps — see "Open questions"
-  below). `POST /agents` finally gets built here too. Milestone: simulate refresh token theft (reuse an
-  already-rotated token) and assert the whole family gets revoked.
+- Phase 6: `WS /live/{agent_id}` pushing graph deltas from the aggregator's `active_traces` (already
+  built in Phase 4, just not wired to a live transport yet) as events arrive. Milestone: two browser
+  tabs open, agent runs, both see identical live updates with no polling.
 
 ## Known deviations from BUILD_PLAN.md
 - None in phase *order*. Implementation-level deviations from the original spec docs, all flagged in
   code/API_SPEC.md/ARCHITECTURE.md rather than silently guessed: (1) interceptor language (Phase 0,
   §7), (2) interceptor doesn't proxy the real downstream call, the SDK does (Phase 1, §8), (3)
   `policy_sets` added for stable identity across policy versions (Phase 2, §10), (4) policy dashboard
-  endpoints take an explicit `org_id` param until Phase 5 auth lands (Phase 2, §11), (5) `/intercept`
-  never blocks for approval, `GET /approvals/{id}` is the real long-poll target (Phase 3, §13), (6)
-  `PolicyEvaluated` event type never emitted, folded into the decision events instead (Phase 4, §14).
+  endpoints took an explicit `org_id` param before auth existed, now removed (Phase 2 §11 → Phase 5),
+  (5) `/intercept` never blocks for approval, `GET /approvals/{id}` is the real long-poll target
+  (Phase 3, §13), (6) `PolicyEvaluated` event type never emitted, folded into the decision events
+  instead (Phase 4, §14).
 
 ## Open questions / decisions needed
-- None currently blocking. Three things to land in Phase 5: (1) `POST /agents` (dashboard API, needs
-  RBAC) doesn't exist yet — tests insert agents directly via SQL as a stand-in. (2) Swap `/policies`',
-  `/approvals`', and `/traces`' explicit `org_id` param/field for one derived from the authenticated
-  JWT session — the isolation logic itself shouldn't need to change, only where `org_id` comes from.
-  (3) Populate `approval_requests.resolved_by` once real user sessions exist; add the deferred FK to
-  `users(id)`.
+- None currently blocking. One thing to revisit later: `POST /agents` and a signup/registration
+  endpoint still don't exist — neither AUTH.md nor API_SPEC.md specs one, so agents and users are both
+  inserted directly via SQL in dev/tests. Worth building real endpoints for both before any actual demo
+  that isn't purely API-driven (Phase 8's reference agent will need a real way to register itself).

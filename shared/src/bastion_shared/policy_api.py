@@ -1,8 +1,8 @@
 """GET/POST /policies, POST /policies/{id}/activate — API_SPEC.md's
-"Human/dashboard API." `org_id` is an explicit request field for now, not
-derived from a session — see docs/ARCHITECTURE.md §11: these endpoints are
-unauthenticated until Phase 5 retrofits JWT + RBAC, by BUILD_PLAN.md's own
-phase order, not by oversight."""
+"Human/dashboard API." Phase 2-4 had `org_id` as an explicit request field
+(no auth existed yet — see docs/ARCHITECTURE.md §11); Phase 5 derives it
+from the authenticated JWT session instead, so it's no longer part of the
+request body at all."""
 
 from __future__ import annotations
 
@@ -15,7 +15,6 @@ from .policy import PolicyDefinition
 
 
 class CreatePolicyRequest(BaseModel):
-    org_id: UUID
     name: str
     definition: PolicyDefinition
 

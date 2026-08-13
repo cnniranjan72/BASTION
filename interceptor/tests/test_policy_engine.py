@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+import uuid
 from collections.abc import Awaitable, Callable
 from uuid import UUID
 
@@ -43,6 +44,10 @@ def _bastion_client(agent_id: UUID, raw_key: str) -> BastionClient:
     )
 
 
+def _auth_headers(login: dict[str, str]) -> dict[str, str]:
+    return {"Authorization": f"Bearer {login['access_token']}"}
+
+
 async def _noop() -> str:
     return "ok"
 
@@ -74,15 +79,21 @@ def test_condition_evaluator_rejects_unsafe_expressions(expr: str) -> None:
 # -- Policy CRUD + versioning + intercept integration --------------------
 
 
-async def test_create_policy_does_not_mutate_previous_version(test_org: UUID) -> None:
+async def test_create_policy_does_not_mutate_previous_version(
+    make_user: Callable[..., Awaitable[dict]], login_as: Callable[[dict], Awaitable[dict]]
+) -> None:
+    user = await make_user(role="admin")
+    login = await login_as(user)
     async with _http_client() as http:
         v1 = await http.post(
             "/policies",
-            json={"org_id": str(test_org), "name": "versioning-test", "definition": []},
+            json={"name": "versioning-test", "definition": []},
+            headers=_auth_headers(login),
         )
         v2 = await http.post(
             "/policies",
-            json={"org_id": str(test_org), "name": "versioning-test", "definition": []},
+            json={"name": "versioning-test", "definition": []},
+            headers=_auth_headers(login),
         )
     assert v1.json()["version"] == 1
     assert v2.json()["version"] == 2
@@ -90,7 +101,11 @@ async def test_create_policy_does_not_mutate_previous_version(test_org: UUID) ->
     assert v1.json()["policy_set_id"] == v2.json()["policy_set_id"]
 
 
-async def test_create_policy_rejects_unsafe_condition_with_error_envelope(test_org: UUID) -> None:
+async def test_create_policy_rejects_unsafe_condition_with_error_envelope(
+    make_user: Callable[..., Awaitable[dict]], login_as: Callable[[dict], Awaitable[dict]]
+) -> None:
+    user = await make_user(role="admin")
+    login = await login_as(user)
     definition = [
         {
             "match": {"tool": "payments.charge"},
@@ -101,7 +116,8 @@ async def test_create_policy_rejects_unsafe_condition_with_error_envelope(test_o
     async with _http_client() as http:
         response = await http.post(
             "/policies",
-            json={"org_id": str(test_org), "name": "unsafe-condition", "definition": definition},
+            json={"name": "unsafe-condition", "definition": definition},
+            headers=_auth_headers(login),
         )
     assert response.status_code == 400
     body = response.json()
@@ -110,22 +126,22 @@ async def test_create_policy_rejects_unsafe_condition_with_error_envelope(test_o
 
 
 async def test_policy_governs_intercept_decisions(
-    test_org: UUID,
     test_agent: tuple[UUID, str],
+    make_user: Callable[..., Awaitable[dict]],
+    login_as: Callable[[dict], Awaitable[dict]],
     assign_policy_set_to_agent: Callable[[UUID, UUID], Awaitable[None]],
 ) -> None:
     agent_id, raw_key = test_agent
+    user = await make_user(role="admin")
+    login = await login_as(user)
     async with _http_client() as http:
         created = await http.post(
             "/policies",
-            json={
-                "org_id": str(test_org),
-                "name": "intercept-integration",
-                "definition": DELETE_ON_PRODUCTION_BLOCKED,
-            },
+            json={"name": "intercept-integration", "definition": DELETE_ON_PRODUCTION_BLOCKED},
+            headers=_auth_headers(login),
         )
         policy = created.json()
-        await http.post(f"/policies/{policy['id']}/activate")
+        await http.post(f"/policies/{policy['id']}/activate", headers=_auth_headers(login))
 
     # /policies/{id}/activate already updated this process's policy_cache
     # synchronously (before publishing to Redis) — no reload needed here.
@@ -148,12 +164,17 @@ async def test_policy_governs_intercept_decisions(
 # -- Hot reload via Redis pub/sub: the Phase 2 milestone -----------------
 
 
-async def test_hot_reload_propagates_via_pubsub_within_a_few_seconds(test_org: UUID) -> None:
+async def test_hot_reload_propagates_via_pubsub_within_a_few_seconds(
+    make_user: Callable[..., Awaitable[dict]], login_as: Callable[[dict], Awaitable[dict]]
+) -> None:
     """Simulates a *second* interceptor instance: its own PolicyCache and
     its own Redis subscription, independent of the module-level cache the
     app under test uses. Proves the reload travels over the wire (real
     Redis, real pub/sub), not just "the same process updated its own dict."
     """
+    user = await make_user(role="admin")
+    login = await login_as(user)
+
     other_cache = policy_engine.PolicyCache()
     other_bus = RedisBus()
     await other_bus.connect()
@@ -174,14 +195,11 @@ async def test_hot_reload_propagates_via_pubsub_within_a_few_seconds(test_org: U
         async with _http_client() as http:
             created = await http.post(
                 "/policies",
-                json={
-                    "org_id": str(test_org),
-                    "name": "hot-reload-test",
-                    "definition": DELETE_ON_PRODUCTION_BLOCKED,
-                },
+                json={"name": "hot-reload-test", "definition": DELETE_ON_PRODUCTION_BLOCKED},
+                headers=_auth_headers(login),
             )
             policy = created.json()
-            await http.post(f"/policies/{policy['id']}/activate")
+            await http.post(f"/policies/{policy['id']}/activate", headers=_auth_headers(login))
 
         policy_set_id = UUID(policy["policy_set_id"])
         deadline = time.monotonic() + 5
@@ -199,17 +217,27 @@ async def test_hot_reload_propagates_via_pubsub_within_a_few_seconds(test_org: U
 # -- Multi-tenancy isolation (CLAUDE.md rule #7) --------------------------
 
 
-async def test_org_cannot_read_another_orgs_policies(test_org: UUID) -> None:
-    org_a = test_org
+async def test_org_cannot_read_another_orgs_policies(
+    make_user: Callable[..., Awaitable[dict]], login_as: Callable[[dict], Awaitable[dict]]
+) -> None:
+    user_a = await make_user(role="admin")
+    login_a = await login_as(user_a)
+
+    org_b = uuid.uuid4()
+    conn = await db.pool.acquire()
+    try:
+        await conn.execute("INSERT INTO organizations (id, name) VALUES ($1, 'org-b')", org_b)
+    finally:
+        await db.pool.release(conn)
+    user_b = await make_user(role="admin", org_id=org_b)
+    login_b = await login_as(user_b)
+
     async with _http_client() as http:
         await http.post(
             "/policies",
-            json={"org_id": str(org_a), "name": "org-a-secret", "definition": []},
+            json={"name": "org-a-secret", "definition": []},
+            headers=_auth_headers(login_a),
         )
-
-        org_b = await db.pool.fetchval(
-            "INSERT INTO organizations (id, name) VALUES (gen_random_uuid(), 'org-b') RETURNING id"
-        )
-        response = await http.get("/policies", params={"org_id": str(org_b)})
+        response = await http.get("/policies", headers=_auth_headers(login_b))
 
     assert response.json() == []

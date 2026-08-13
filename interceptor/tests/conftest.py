@@ -9,13 +9,17 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 
 import asyncpg
+import httpx
 import pytest
 import pytest_asyncio
 from bastion_interceptor.db import db
+from bastion_interceptor.human_auth import hash_password
+from bastion_interceptor.main import app
 from bastion_interceptor.redis_bus import redis_bus
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MIGRATE_SCRIPT = REPO_ROOT / "infra" / "db" / "migrate.py"
+GENERATE_KEYS_SCRIPT = REPO_ROOT / "infra" / "keys" / "generate_dev_keys.py"
 DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://bastion:bastion@localhost:5442/bastion")
 
 
@@ -27,6 +31,14 @@ def _migrated_database() -> None:
         cwd=REPO_ROOT,
         env={**os.environ, "DATABASE_URL": DATABASE_URL},
     )
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _jwt_keys() -> None:
+    # Idempotent (skips if keys already exist) — same reasoning as
+    # _migrated_database: tests need this to exist before any auth-touching
+    # code runs, and CI starts from a fresh checkout every time.
+    subprocess.run([sys.executable, str(GENERATE_KEYS_SCRIPT)], check=True)
 
 
 @pytest_asyncio.fixture(scope="session", autouse=True)
@@ -110,3 +122,60 @@ def assign_policy_set_to_agent():
             await conn.close()
 
     return _assign
+
+
+DEFAULT_TEST_PASSWORD = "correct horse battery staple"
+
+
+@pytest_asyncio.fixture
+def make_user(test_org: uuid.UUID):
+    """Factory (not a fixed user) so RBAC tests can create users with
+    different roles. Standing in for the not-yet-built signup endpoint —
+    API_SPEC.md's Auth section only ever specs login/refresh/logout, no
+    registration — direct SQL, same reasoning as test_agent."""
+
+    async def _make(role: str = "owner", org_id: uuid.UUID | None = None) -> dict[str, object]:
+        user_id = uuid.uuid4()
+        email = f"{user_id}@example.com"
+        target_org = org_id if org_id is not None else test_org
+        conn = await asyncpg.connect(DATABASE_URL)
+        try:
+            await conn.execute(
+                "INSERT INTO users (id, org_id, email, password_hash, role) "
+                "VALUES ($1, $2, $3, $4, $5)",
+                user_id,
+                target_org,
+                email,
+                hash_password(DEFAULT_TEST_PASSWORD),
+                role,
+            )
+        finally:
+            await conn.close()
+        return {
+            "id": user_id,
+            "org_id": target_org,
+            "email": email,
+            "password": DEFAULT_TEST_PASSWORD,
+            "role": role,
+        }
+
+    return _make
+
+
+@pytest_asyncio.fixture
+def login_as():
+    """Drives the real POST /auth/login — tests get a genuine token pair,
+    not a hand-constructed one, so the login flow itself stays covered by
+    every test that uses this rather than only by test_auth.py directly."""
+
+    async def _login(user: dict[str, object]) -> dict[str, str]:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://interceptor.test"
+        ) as http:
+            response = await http.post(
+                "/auth/login", json={"email": user["email"], "password": user["password"]}
+            )
+        response.raise_for_status()
+        return response.json()
+
+    return _login

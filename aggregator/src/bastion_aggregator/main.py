@@ -6,6 +6,11 @@ folds each notified trace's events into a TraceGraph (graph.py) — the same
 fold GET /traces/{id} uses on demand — and persists trace_summaries once a
 trace reaches a terminal state (docs/ARCHITECTURE.md §14). WebSocket fan-out
 lands in Phase 6.
+
+Phase 5: every /traces endpoint requires a real access token (human_auth.py,
+verify-only — the aggregator never issues tokens) and is scoped to the
+caller's own org, derived from the JWT rather than an explicit `org_id`
+param.
 """
 
 from __future__ import annotations
@@ -19,17 +24,20 @@ from uuid import UUID
 
 import structlog
 from bastion_shared import TraceGraph, TraceSummaryResponse
-from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from .config import config
 from .db import db
 from .graph import fold_events_to_graph
+from .human_auth import AuthenticatedUser, authenticate_user
 from .listener import EventListener
 from .logging import configure_logging, log
 
 configure_logging()
+
+require_any_role = Depends(authenticate_user)
 
 listener = EventListener()
 # Live in-memory tracking (ARCHITECTURE.md §2.5) — updated on every
@@ -122,58 +130,71 @@ async def healthz() -> dict[str, str]:
     return {"status": "ok", "service": "aggregator"}
 
 
+def _not_found(request: Request, trace_id: UUID) -> HTTPException:
+    return HTTPException(
+        status_code=404,
+        detail={
+            "error": {
+                "code": "TRACE_NOT_FOUND",
+                "message": f"no trace {trace_id}",
+                "request_id": request.state.request_id,
+            }
+        },
+    )
+
+
 @app.get("/traces/{trace_id}")
-async def get_trace(trace_id: UUID, request: Request) -> TraceGraph:
+async def get_trace(
+    trace_id: UUID, request: Request, user: AuthenticatedUser = require_any_role
+) -> TraceGraph:
     """Full replay: trace_summaries.graph_snapshot if a persisted projection
     exists (fast path), else folds `events` fresh — covers active/in-progress
     traces and demonstrates the event-sourcing discipline (current state is
     always derivable from `events`, the cache is a pure accelerator, not the
-    source of truth — CLAUDE.md rule #1)."""
+    source of truth — CLAUDE.md rule #1). A trace from another org 404s —
+    same rationale as interceptor.py's activate_policy: don't distinguish
+    "doesn't exist" from "exists but isn't yours."
+    """
     summary = await db.get_trace_summary(trace_id)
     if summary is not None:
+        if summary["org_id"] != user.org_id:
+            raise _not_found(request, trace_id)
         return TraceGraph.model_validate(summary["graph_snapshot"])
 
-    if trace_id in active_traces:
-        return active_traces[trace_id]
+    graph = active_traces.get(trace_id)
+    if graph is None:
+        events = await db.get_events_for_trace(trace_id)
+        if not events:
+            raise _not_found(request, trace_id)
+        graph = fold_events_to_graph(events)
 
-    events = await db.get_events_for_trace(trace_id)
-    if not events:
-        raise HTTPException(
-            status_code=404,
-            detail={
-                "error": {
-                    "code": "TRACE_NOT_FOUND",
-                    "message": f"no trace {trace_id}",
-                    "request_id": request.state.request_id,
-                }
-            },
-        )
-    return fold_events_to_graph(events)
+    org_id = await db.get_org_id_for_agent(graph.agent_id)
+    if org_id != user.org_id:
+        raise _not_found(request, trace_id)
+    return graph
 
 
 @app.get("/traces/{trace_id}/events")
-async def get_trace_events(trace_id: UUID, request: Request) -> list[dict[str, Any]]:
+async def get_trace_events(
+    trace_id: UUID, request: Request, user: AuthenticatedUser = require_any_role
+) -> list[dict[str, Any]]:
     """Raw event list, for the 2D inspector panel (ARCHITECTURE.md §2.6)."""
     events = await db.get_events_for_trace(trace_id)
     if not events:
-        raise HTTPException(
-            status_code=404,
-            detail={
-                "error": {
-                    "code": "TRACE_NOT_FOUND",
-                    "message": f"no trace {trace_id}",
-                    "request_id": request.state.request_id,
-                }
-            },
-        )
+        raise _not_found(request, trace_id)
+    org_id = await db.get_org_id_for_agent(events[0]["agent_id"])
+    if org_id != user.org_id:
+        raise _not_found(request, trace_id)
     return [dict(e) for e in events]
 
 
 @app.get("/traces")
-async def list_traces(org_id: UUID) -> list[TraceSummaryResponse]:
+async def list_traces(
+    user: AuthenticatedUser = require_any_role,
+) -> list[TraceSummaryResponse]:
     """Persisted (terminal-state) traces only — an in-progress trace has no
     trace_summaries row yet by design (docs/ARCHITECTURE.md §14)."""
-    records = await db.list_trace_summaries(org_id)
+    records = await db.list_trace_summaries(user.org_id)
     return [
         TraceSummaryResponse(
             trace_id=r["trace_id"],

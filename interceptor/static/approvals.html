@@ -19,13 +19,14 @@
 <body>
   <h1>BASTION — Pending Approvals</h1>
   <p class="notice">
-    Plain HTML/JS approver page, per BUILD_PLAN.md Phase 3 ("not the 3D view yet"). No auth exists
-    until Phase 5, so this takes an explicit org_id instead of a session (see docs/ARCHITECTURE.md §11)
-    — dev/demo tool only.
+    Plain HTML/JS approver page, per BUILD_PLAN.md Phase 3 ("not the 3D view yet") — dev/demo tool
+    only, no login form (that's Phase 7's job). Paste an access token from <code>POST /auth/login</code>
+    (an <code>owner</code>/<code>admin</code>/<code>approver</code> user); org scoping comes from the
+    token's claims, not a field here.
   </p>
   <div>
-    <label for="orgId">org_id:</label>
-    <input id="orgId" size="38" placeholder="00000000-0000-0000-0000-000000000000" />
+    <label for="token">access_token:</label>
+    <input id="token" size="50" placeholder="eyJhbGciOi..." />
     <button id="load">Load pending approvals</button>
   </div>
   <table id="table" hidden>
@@ -40,12 +41,16 @@
 const statusEl = document.getElementById('status');
 const tableEl = document.getElementById('table');
 const rowsEl = document.getElementById('rows');
+const tokenEl = document.getElementById('token');
+
+function authHeaders() {
+  return { 'Authorization': `Bearer ${tokenEl.value.trim()}` };
+}
 
 async function loadApprovals() {
-  const orgId = document.getElementById('orgId').value.trim();
-  if (!orgId) { statusEl.textContent = 'Enter an org_id.'; return; }
+  if (!tokenEl.value.trim()) { statusEl.textContent = 'Paste an access token.'; return; }
   statusEl.textContent = 'Loading...';
-  const res = await fetch(`/approvals?org_id=${encodeURIComponent(orgId)}`);
+  const res = await fetch('/approvals', { headers: authHeaders() });
   if (!res.ok) { statusEl.textContent = `Error: ${res.status}`; return; }
   const approvals = await res.json();
   rowsEl.innerHTML = '';
@@ -73,7 +78,7 @@ rowsEl.addEventListener('click', async (event) => {
   if (!button) return;
   const { id, action } = button.dataset;
   button.disabled = true;
-  const res = await fetch(`/approvals/${id}/${action}`, { method: 'POST' });
+  const res = await fetch(`/approvals/${id}/${action}`, { method: 'POST', headers: authHeaders() });
   statusEl.textContent = res.ok ? `Approval ${id} ${action}d.` : `Error: ${res.status}`;
   await loadApprovals();
 });

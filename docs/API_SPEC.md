@@ -103,55 +103,67 @@ Auth: `Authorization: Bearer <agent api key>` — the span's original agent, sam
 
 ## Human/dashboard API
 
-**Unauthenticated until Phase 5** (docs/ARCHITECTURE.md §11, §13) — every
-endpoint below takes an explicit `org_id` param/field instead of deriving it
-from a session, since JWT auth + RBAC is Phase 5's job by BUILD_PLAN.md's own
-order. Multi-tenancy isolation is still enforced now, just against this
-explicit-`org_id` shape (Phase 5 only changes where `org_id` comes from).
+Auth per AUTH.md §2, implemented Phase 5: argon2id passwords, Ed25519-signed JWT access
+tokens (15 min TTL), refresh token rotation with family-based reuse detection, RBAC.
+Every endpoint below requires `Authorization: Bearer <access token>` and derives org
+scoping from the token's claims — no `org_id` param/field anywhere (Phase 2-4 had one as
+an explicit stopgap before auth existed; docs/ARCHITECTURE.md §11, §13 record that history).
+A resource belonging to a different org 404s, never a distinguishable 403 — "doesn't exist"
+and "exists but isn't yours" look identical to the caller.
 
 ### Auth
-- `POST /auth/login` — email/password → access + refresh token
-- `POST /auth/refresh` — refresh token → new access + refresh token pair (rotation, see AUTH.md)
-- `POST /auth/logout` — revoke current refresh token family
+- `POST /auth/login` — `{ "email": "...", "password": "..." }` → `{ "access_token",
+  "refresh_token", "token_type": "bearer", "role" }`. 401 `INVALID_CREDENTIALS` on failure
+  (no distinction between "no such user" and "wrong password").
+- `POST /auth/refresh` — `{ "refresh_token": "..." }` → a **new** token pair; the presented
+  refresh token is immediately revoked (one-time use). Presenting an already-used token
+  triggers reuse detection: the **entire token family** is revoked (401
+  `REFRESH_TOKEN_REUSED`), forcing full re-login — this is what makes rotation meaningful
+  against a stolen token (AUTH.md §2).
+- `POST /auth/logout` — `{ "refresh_token": "..." }` → revokes the whole family.
 
-**Not yet built (Phase 5).**
+No signup endpoint — AUTH.md doesn't spec one, and none of the phases call for it. Users are
+inserted directly via SQL in dev/tests (`docs/PROGRESS.md`); `POST /users` would be natural
+Phase-5-adjacent scope if a real registration flow is ever needed.
 
 ### Agents & Policies
-- `GET /agents` / `POST /agents` / `GET /agents/{id}` — **not yet built (Phase 5)**; until
-  then, agents are inserted directly via SQL (see `docs/PROGRESS.md`).
-- `POST /policies` — body: `{ "org_id": "uuid", "name": "...", "definition": [...] }`.
-  Creates a new version (never mutates); compiles the definition immediately
-  (400 `INVALID_POLICY_CONDITION` on an unsafe/malformed condition expression,
-  not a 500) even though it isn't active yet.
-- `GET /policies?org_id=uuid` — all versions for an org.
-- `POST /policies/{id}/activate` — deactivates every other version in the same
-  policy set, activates this one, hot-reloads every interceptor instance via
-  Redis pub/sub (no restart).
+- `GET /agents` / `POST /agents` / `GET /agents/{id}` — **not yet built**; agents are
+  inserted directly via SQL (see `docs/PROGRESS.md`). Same non-spec gap as signup above.
+- `POST /policies` (role: `owner`/`admin`) — body: `{ "name": "...", "definition": [...] }`.
+  Creates a new version (never mutates); compiles the definition immediately (400
+  `INVALID_POLICY_CONDITION` on an unsafe/malformed condition expression, not a 500) even
+  though it isn't active yet.
+- `GET /policies` (any role) — all versions for the caller's org.
+- `POST /policies/{id}/activate` (role: `owner`/`admin`) — deactivates every other version
+  in the same policy set, activates this one, hot-reloads every interceptor instance via
+  Redis pub/sub (no restart). Org ownership is checked *before* any row is mutated, not
+  filtered from the response afterward.
 
 ### Approvals
-- `GET /approvals?org_id=uuid` — pending approvals for an org (BUILD_PLAN.md's
+- `GET /approvals` (any role) — pending approvals for the caller's org (BUILD_PLAN.md's
   `?status=pending` is implicit: this endpoint only ever returns pending ones).
-- `POST /approvals/{id}/approve`
-- `POST /approvals/{id}/deny`
+- `POST /approvals/{id}/approve` (role: `owner`/`admin`/`approver`)
+- `POST /approvals/{id}/deny` (role: `owner`/`admin`/`approver`)
 
-Both approve/deny return the updated `ApprovalRequestResponse` shape (above);
-`resolved_by` is always `null` until Phase 5. A 409 `APPROVAL_NOT_PENDING` if
-the approval was already resolved (or never existed) — resolution only ever
-transitions a genuinely `pending` row, so two approvers racing each other
-isn't a silent overwrite.
+Both approve/deny return the updated `ApprovalRequestResponse` shape (above), with
+`resolved_by` now populated from the authenticated user. A 409 `APPROVAL_NOT_PENDING` if the
+approval was already resolved, belongs to a different org, or never existed — resolution
+only ever transitions a genuinely pending row in the caller's own org, atomically, so two
+approvers racing each other isn't a silent overwrite.
 
-A plain HTML/JS approver page (no build step, no 3D view — BUILD_PLAN.md
-Phase 3 explicitly calls this out as the acceptable interim UI) is served at
-`GET /approvals-ui`.
+A plain HTML/JS approver page (no build step, no 3D view — BUILD_PLAN.md Phase 3 explicitly
+calls this out as the acceptable interim UI) is served at `GET /approvals-ui`; it takes a
+pasted access token, no login form (that's Phase 7's job).
 
 ### Traces
 **Served by the aggregator, not the interceptor** (`aggregator/src/bastion_aggregator/main.py`)
-— it owns the read-model these come from. `agent_id`/`status`/`from`/`to` filters aren't
-implemented yet, only `org_id` (same explicit-param pattern as Policies/Approvals above).
+— it owns the read-model these come from, and independently verifies the same JWTs (public
+key only, AUTH.md's "without calling the auth service"). `agent_id`/`status`/`from`/`to`
+filters aren't implemented yet.
 
-- `GET /traces?org_id=uuid` — persisted (terminal-state) traces only, newest first. An
-  in-progress trace has no `trace_summaries` row by design (see `GET /traces/{id}` below) —
-  it won't appear here until it finishes.
+- `GET /traces` (any role) — persisted (terminal-state) traces for the caller's org, newest
+  first. An in-progress trace has no `trace_summaries` row by design (see `GET /traces/{id}`
+  below) — it won't appear here until it finishes.
 - `GET /traces/{trace_id}` — full replay: `trace_summaries.graph_snapshot` if a persisted
   projection exists (fast path), else folds `events` fresh — this is what makes an
   **in-progress** trace replayable too, not just completed ones (event-sourcing discipline:

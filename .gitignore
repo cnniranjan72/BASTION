@@ -28,3 +28,5 @@ venv/
 
 infra/docker/pgdata/
 infra/docker/redisdata/
+
+infra/keys/*.pem

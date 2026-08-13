@@ -8,6 +8,7 @@ hand — see docs/ARCHITECTURE.md §7 (Language & schema decisions).
 """
 
 from .approvals import ApprovalRequestResponse, ApprovalStatus
+from .auth_api import LoginRequest, LogoutRequest, RefreshRequest, TokenPairResponse
 from .errors import BastionError, ErrorDetail, ErrorResponse
 from .events import (
     CallAttemptedPayload,
@@ -25,6 +26,14 @@ from .intercept import (
     InterceptRequest,
     InterceptResponse,
 )
+from .jwt_auth import (
+    AccessTokenClaims,
+    InvalidAccessToken,
+    UserRole,
+    decode_access_token,
+    encode_access_token,
+    load_key_file,
+)
 from .policy import Policy, PolicyDefinition, PolicyMatch, PolicyRule
 from .policy_api import CreatePolicyRequest, PolicyResponse
 from .realtime import (
@@ -39,6 +48,10 @@ from .spans import CompleteSpanRequest, CompleteSpanResponse
 __all__ = [
     "ApprovalRequestResponse",
     "ApprovalStatus",
+    "LoginRequest",
+    "LogoutRequest",
+    "RefreshRequest",
+    "TokenPairResponse",
     "BastionError",
     "ErrorDetail",
     "ErrorResponse",
@@ -59,6 +72,12 @@ __all__ = [
     "InterceptPendingResponse",
     "InterceptRequest",
     "InterceptResponse",
+    "AccessTokenClaims",
+    "InvalidAccessToken",
+    "UserRole",
+    "decode_access_token",
+    "encode_access_token",
+    "load_key_file",
     "Policy",
     "PolicyDefinition",
     "PolicyMatch",

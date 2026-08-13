@@ -98,7 +98,7 @@ No updates or deletes on this table. Ever. Enforce with a DB trigger or role per
 | span_id | uuid | |
 | status | enum | pending / approved / denied / timed_out |
 | requested_at | timestamptz | |
-| resolved_by | uuid fk nullable | user_id — FK to `users(id)` deferred to Phase 5 (table doesn't exist until then, same pattern as `agents.default_policy_set_id`); always `null` until then |
+| resolved_by | uuid fk nullable | user_id, FK added in Phase 5 migration (`0005_users_auth.sql`) once `users` exists |
 | resolved_at | timestamptz nullable | |
 
 ### `trace_summaries` (read-model / projection, rebuildable from `events`)

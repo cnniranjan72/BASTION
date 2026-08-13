@@ -9,15 +9,19 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 
 import asyncpg
+import httpx
 import pytest
 import pytest_asyncio
 from bastion_aggregator.db import db
 from bastion_aggregator.main import _handle_notification, listener
 from bastion_interceptor.db import db as interceptor_db
+from bastion_interceptor.human_auth import hash_password
+from bastion_interceptor.main import app as interceptor_app
 from bastion_interceptor.redis_bus import redis_bus as interceptor_redis_bus
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MIGRATE_SCRIPT = REPO_ROOT / "infra" / "db" / "migrate.py"
+GENERATE_KEYS_SCRIPT = REPO_ROOT / "infra" / "keys" / "generate_dev_keys.py"
 DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://bastion:bastion@localhost:5442/bastion")
 
 
@@ -29,6 +33,11 @@ def _migrated_database() -> None:
         cwd=REPO_ROOT,
         env={**os.environ, "DATABASE_URL": DATABASE_URL},
     )
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _jwt_keys() -> None:
+    subprocess.run([sys.executable, str(GENERATE_KEYS_SCRIPT)], check=True)
 
 
 @pytest_asyncio.fixture(scope="session", autouse=True)
@@ -100,3 +109,57 @@ async def test_agent(test_org: uuid.UUID) -> tuple[uuid.UUID, str]:
         await conn.close()
 
     return agent_id, raw_key
+
+
+DEFAULT_TEST_PASSWORD = "correct horse battery staple"
+
+
+@pytest_asyncio.fixture
+def make_user(test_org: uuid.UUID):
+    """Same reasoning as interceptor/tests/conftest.py's fixture of the same
+    name — duplicated rather than shared across packages' test suites."""
+
+    async def _make(role: str = "owner", org_id: uuid.UUID | None = None) -> dict[str, object]:
+        user_id = uuid.uuid4()
+        email = f"{user_id}@example.com"
+        target_org = org_id if org_id is not None else test_org
+        conn = await asyncpg.connect(DATABASE_URL)
+        try:
+            await conn.execute(
+                "INSERT INTO users (id, org_id, email, password_hash, role) "
+                "VALUES ($1, $2, $3, $4, $5)",
+                user_id,
+                target_org,
+                email,
+                hash_password(DEFAULT_TEST_PASSWORD),
+                role,
+            )
+        finally:
+            await conn.close()
+        return {
+            "id": user_id,
+            "org_id": target_org,
+            "email": email,
+            "password": DEFAULT_TEST_PASSWORD,
+            "role": role,
+        }
+
+    return _make
+
+
+@pytest_asyncio.fixture
+def login_as():
+    """Logs in via the *interceptor's* app (the only thing that issues
+    tokens) — the aggregator only ever verifies them."""
+
+    async def _login(user: dict[str, object]) -> dict[str, str]:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=interceptor_app), base_url="http://interceptor.test"
+        ) as http:
+            response = await http.post(
+                "/auth/login", json={"email": user["email"], "password": user["password"]}
+            )
+        response.raise_for_status()
+        return response.json()
+
+    return _login

@@ -12,10 +12,12 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections.abc import Awaitable, Callable
 from uuid import UUID
 
 import httpx
 from bastion import BastionClient, current_span
+from bastion_aggregator.db import db
 from bastion_aggregator.main import app as aggregator_app
 from bastion_interceptor.main import app as interceptor_app
 
@@ -33,6 +35,10 @@ def _aggregator_client() -> httpx.AsyncClient:
     return httpx.AsyncClient(
         transport=httpx.ASGITransport(app=aggregator_app), base_url="http://aggregator.test"
     )
+
+
+def _auth_headers(login: dict[str, str]) -> dict[str, str]:
+    return {"Authorization": f"Bearer {login['access_token']}"}
 
 
 async def _generate_trace(agent_id: UUID, raw_key: str) -> UUID:
@@ -59,25 +65,32 @@ async def _generate_trace(agent_id: UUID, raw_key: str) -> UUID:
     return captured["trace_id"]
 
 
-async def _wait_for_persisted_trace(trace_id: UUID, deadline_seconds: float = 5.0) -> dict:
+async def _wait_for_persisted_trace(
+    trace_id: UUID, login: dict[str, str], deadline_seconds: float = 5.0
+) -> dict:
     """The aggregator persists trace_summaries asynchronously, off a
     LISTEN/NOTIFY notification — not synchronously with the intercept calls
     above, so the test polls rather than asserting immediately."""
     deadline = time.monotonic() + deadline_seconds
     async with _aggregator_client() as http:
         while time.monotonic() < deadline:
-            response = await http.get(f"/traces/{trace_id}")
+            response = await http.get(f"/traces/{trace_id}", headers=_auth_headers(login))
             if response.status_code == 200 and response.json()["status"] != "running":
                 return response.json()
             await asyncio.sleep(0.05)
     raise AssertionError("trace was not persisted as terminal in time")
 
 
-async def test_replay_reconstructs_causal_graph(test_agent: tuple[UUID, str]) -> None:
+async def test_replay_reconstructs_causal_graph(
+    test_agent: tuple[UUID, str],
+    make_user: Callable[..., Awaitable[dict]],
+    login_as: Callable[[dict], Awaitable[dict]],
+) -> None:
     agent_id, raw_key = test_agent
+    login = await login_as(await make_user(role="viewer"))
     trace_id = await _generate_trace(agent_id, raw_key)
 
-    graph = await _wait_for_persisted_trace(trace_id)
+    graph = await _wait_for_persisted_trace(trace_id, login)
 
     assert graph["trace_id"] == str(trace_id)
     assert graph["agent_id"] == str(agent_id)
@@ -102,13 +115,18 @@ async def test_replay_reconstructs_causal_graph(test_agent: tuple[UUID, str]) ->
         assert edge["to"] in nodes_by_span
 
 
-async def test_get_trace_events_returns_raw_event_list(test_agent: tuple[UUID, str]) -> None:
+async def test_get_trace_events_returns_raw_event_list(
+    test_agent: tuple[UUID, str],
+    make_user: Callable[..., Awaitable[dict]],
+    login_as: Callable[[dict], Awaitable[dict]],
+) -> None:
     agent_id, raw_key = test_agent
+    login = await login_as(await make_user(role="viewer"))
     trace_id = await _generate_trace(agent_id, raw_key)
-    await _wait_for_persisted_trace(trace_id)
+    await _wait_for_persisted_trace(trace_id, login)
 
     async with _aggregator_client() as http:
-        response = await http.get(f"/traces/{trace_id}/events")
+        response = await http.get(f"/traces/{trace_id}/events", headers=_auth_headers(login))
     events = response.json()
 
     assert response.status_code == 200
@@ -118,26 +136,39 @@ async def test_get_trace_events_returns_raw_event_list(test_agent: tuple[UUID, s
     assert seqs == sorted(seqs)
 
 
-async def test_list_traces_scoped_by_org(test_org: UUID, test_agent: tuple[UUID, str]) -> None:
+async def test_list_traces_scoped_by_org(
+    test_agent: tuple[UUID, str],
+    make_user: Callable[..., Awaitable[dict]],
+    login_as: Callable[[dict], Awaitable[dict]],
+) -> None:
     agent_id, raw_key = test_agent
+    same_org_login = await login_as(await make_user(role="viewer"))
     trace_id = await _generate_trace(agent_id, raw_key)
-    await _wait_for_persisted_trace(trace_id)
+    await _wait_for_persisted_trace(trace_id, same_org_login)
+
+    other_org = await db.pool.fetchval(
+        "INSERT INTO organizations (id, name) VALUES (gen_random_uuid(), 'org-b') RETURNING id"
+    )
+    other_org_login = await login_as(await make_user(role="viewer", org_id=other_org))
 
     async with _aggregator_client() as http:
-        same_org = await http.get("/traces", params={"org_id": str(test_org)})
-        other_org_response = await http.get(
-            "/traces", params={"org_id": "00000000-0000-0000-0000-000000000000"}
-        )
+        same_org = await http.get("/traces", headers=_auth_headers(same_org_login))
+        other_org_response = await http.get("/traces", headers=_auth_headers(other_org_login))
 
     assert str(trace_id) in [t["trace_id"] for t in same_org.json()]
     assert other_org_response.json() == []
 
 
-async def test_replay_before_completion_folds_live(test_agent: tuple[UUID, str]) -> None:
+async def test_replay_before_completion_folds_live(
+    test_agent: tuple[UUID, str],
+    make_user: Callable[..., Awaitable[dict]],
+    login_as: Callable[[dict], Awaitable[dict]],
+) -> None:
     """GET /traces/{id} must work for an in-progress trace too — event
     sourcing means current state is always derivable, not just once a
     projection has been persisted."""
     agent_id, raw_key = test_agent
+    login = await login_as(await make_user(role="viewer"))
     started = asyncio.Event()
     finish = asyncio.Event()
     captured: dict[str, UUID] = {}
@@ -159,7 +190,9 @@ async def test_replay_before_completion_folds_live(test_agent: tuple[UUID, str])
         graph = None
         async with _aggregator_client() as http:
             while time.monotonic() < deadline:
-                response = await http.get(f"/traces/{captured['trace_id']}")
+                response = await http.get(
+                    f"/traces/{captured['trace_id']}", headers=_auth_headers(login)
+                )
                 if response.status_code == 200:
                     graph = response.json()
                     break

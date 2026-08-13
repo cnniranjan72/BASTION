@@ -36,8 +36,12 @@ def _bastion_client(agent_id: UUID, raw_key: str) -> BastionClient:
     )
 
 
+def _auth_headers(login: dict[str, str]) -> dict[str, str]:
+    return {"Authorization": f"Bearer {login['access_token']}"}
+
+
 async def _create_and_assign_approval_policy(
-    test_org: UUID,
+    login: dict[str, str],
     agent_id: UUID,
     assign_policy_set_to_agent: Callable[[UUID, UUID], Awaitable[None]],
     name: str,
@@ -45,22 +49,19 @@ async def _create_and_assign_approval_policy(
     async with _http_client() as http:
         created = await http.post(
             "/policies",
-            json={
-                "org_id": str(test_org),
-                "name": name,
-                "definition": REQUIRE_APPROVAL_FOR_PAYMENTS,
-            },
+            json={"name": name, "definition": REQUIRE_APPROVAL_FOR_PAYMENTS},
+            headers=_auth_headers(login),
         )
         policy = created.json()
-        await http.post(f"/policies/{policy['id']}/activate")
+        await http.post(f"/policies/{policy['id']}/activate", headers=_auth_headers(login))
     await assign_policy_set_to_agent(agent_id, UUID(policy["policy_set_id"]))
 
 
-async def _wait_for_pending_approval(org_id: UUID, deadline_seconds: float = 5.0) -> dict:
+async def _wait_for_pending_approval(login: dict[str, str], deadline_seconds: float = 5.0) -> dict:
     deadline = time.monotonic() + deadline_seconds
     while time.monotonic() < deadline:
         async with _http_client() as http:
-            response = await http.get("/approvals", params={"org_id": str(org_id)})
+            response = await http.get("/approvals", headers=_auth_headers(login))
         pending = response.json()
         if pending:
             return pending[0]
@@ -69,14 +70,18 @@ async def _wait_for_pending_approval(org_id: UUID, deadline_seconds: float = 5.0
 
 
 async def test_approval_flow_pauses_and_resumes_on_approve(
-    test_org: UUID,
     test_agent: tuple[UUID, str],
+    make_user: Callable[..., Awaitable[dict]],
+    login_as: Callable[[dict], Awaitable[dict]],
     assign_policy_set_to_agent: Callable[[UUID, UUID], Awaitable[None]],
 ) -> None:
     agent_id, raw_key = test_agent
+    admin_login = await login_as(await make_user(role="admin"))
     await _create_and_assign_approval_policy(
-        test_org, agent_id, assign_policy_set_to_agent, "approve-flow"
+        admin_login, agent_id, assign_policy_set_to_agent, "approve-flow"
     )
+    approver = await make_user(role="approver")
+    approver_login = await login_as(approver)
 
     executed = False
 
@@ -88,16 +93,19 @@ async def test_approval_flow_pauses_and_resumes_on_approve(
     async with _bastion_client(agent_id, raw_key) as client:
         call_task = asyncio.create_task(client.call("payments.charge", {"amount": 100}, execute))
 
-        approval = await _wait_for_pending_approval(test_org)
+        approval = await _wait_for_pending_approval(approver_login)
         # The call is genuinely paused, not just "about to return" — execute()
         # must not have run yet, and the task must still be in flight.
         assert executed is False
         assert not call_task.done()
 
         async with _http_client() as http:
-            approve_response = await http.post(f"/approvals/{approval['id']}/approve")
+            approve_response = await http.post(
+                f"/approvals/{approval['id']}/approve", headers=_auth_headers(approver_login)
+            )
         assert approve_response.status_code == 200
         assert approve_response.json()["status"] == "approved"
+        assert approve_response.json()["resolved_by"] == str(approver["id"])
 
         result = await asyncio.wait_for(call_task, timeout=5)
 
@@ -106,14 +114,17 @@ async def test_approval_flow_pauses_and_resumes_on_approve(
 
 
 async def test_approval_flow_denied_by_human(
-    test_org: UUID,
     test_agent: tuple[UUID, str],
+    make_user: Callable[..., Awaitable[dict]],
+    login_as: Callable[[dict], Awaitable[dict]],
     assign_policy_set_to_agent: Callable[[UUID, UUID], Awaitable[None]],
 ) -> None:
     agent_id, raw_key = test_agent
+    admin_login = await login_as(await make_user(role="admin"))
     await _create_and_assign_approval_policy(
-        test_org, agent_id, assign_policy_set_to_agent, "deny-flow"
+        admin_login, agent_id, assign_policy_set_to_agent, "deny-flow"
     )
+    approver_login = await login_as(await make_user(role="approver"))
 
     executed = False
 
@@ -125,10 +136,12 @@ async def test_approval_flow_denied_by_human(
     async with _bastion_client(agent_id, raw_key) as client:
         call_task = asyncio.create_task(client.call("payments.charge", {"amount": 100}, execute))
 
-        approval = await _wait_for_pending_approval(test_org)
+        approval = await _wait_for_pending_approval(approver_login)
 
         async with _http_client() as http:
-            deny_response = await http.post(f"/approvals/{approval['id']}/deny")
+            deny_response = await http.post(
+                f"/approvals/{approval['id']}/deny", headers=_auth_headers(approver_login)
+            )
         assert deny_response.status_code == 200
         assert deny_response.json()["status"] == "denied"
 
@@ -140,14 +153,53 @@ async def test_approval_flow_denied_by_human(
     assert executed is False
 
 
-async def test_approval_timeout_denies_after_ttl(
-    test_org: UUID,
+async def test_viewer_cannot_approve(
     test_agent: tuple[UUID, str],
+    make_user: Callable[..., Awaitable[dict]],
+    login_as: Callable[[dict], Awaitable[dict]],
     assign_policy_set_to_agent: Callable[[UUID, UUID], Awaitable[None]],
 ) -> None:
     agent_id, raw_key = test_agent
+    admin = await make_user(role="admin")
+    admin_login = await login_as(admin)
     await _create_and_assign_approval_policy(
-        test_org, agent_id, assign_policy_set_to_agent, "timeout-flow"
+        admin_login, agent_id, assign_policy_set_to_agent, "viewer-forbidden-flow"
+    )
+
+    async def execute() -> str:
+        return "charged"
+
+    viewer = await make_user(role="viewer")
+    viewer_login = await login_as(viewer)
+
+    async with _bastion_client(agent_id, raw_key) as client:
+        call_task = asyncio.create_task(client.call("payments.charge", {"amount": 100}, execute))
+        approval = await _wait_for_pending_approval(admin_login)
+
+        async with _http_client() as http:
+            response = await http.post(
+                f"/approvals/{approval['id']}/approve", headers=_auth_headers(viewer_login)
+            )
+        assert response.status_code == 403
+
+        # Clean up the still-pending call so the test doesn't leak a task
+        # waiting on the full long-poll/TTL window.
+        async with _http_client() as http:
+            await http.post(f"/approvals/{approval['id']}/deny", headers=_auth_headers(admin_login))
+        with pytest.raises(BastionBlockedError):
+            await asyncio.wait_for(call_task, timeout=5)
+
+
+async def test_approval_timeout_denies_after_ttl(
+    test_agent: tuple[UUID, str],
+    make_user: Callable[..., Awaitable[dict]],
+    login_as: Callable[[dict], Awaitable[dict]],
+    assign_policy_set_to_agent: Callable[[UUID, UUID], Awaitable[None]],
+) -> None:
+    agent_id, raw_key = test_agent
+    admin_login = await login_as(await make_user(role="admin"))
+    await _create_and_assign_approval_policy(
+        admin_login, agent_id, assign_policy_set_to_agent, "timeout-flow"
     )
 
     # Frozen dataclass: object.__setattr__ is the standard escape hatch for

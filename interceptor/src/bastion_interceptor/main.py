@@ -18,20 +18,31 @@ scalable hot-path story). GET /approvals/{id} is the actual long-poll
 target the SDK calls in a loop; it's woken by a Redis pub/sub signal rather
 than busy-polling Postgres, but Postgres is still the source of truth for
 what happened. See docs/ARCHITECTURE.md's approval-flow section.
+
+Phase 5: real auth per AUTH.md — argon2id passwords, Ed25519-signed JWT
+access tokens, refresh token rotation with family-based reuse detection
+(POST /auth/refresh), RBAC. Every dashboard endpoint (policies, approvals)
+now requires an authenticated user and derives org scoping from the JWT
+instead of the Phase 2-4 explicit `org_id` param stopgap.
 """
 
 from __future__ import annotations
 
+import hashlib
+import secrets
 import time
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime, timedelta
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal
 from uuid import UUID
 
 import structlog
 from bastion_shared import (
+    AccessTokenClaims,
     ApprovalRequestResponse,
     CallAttemptedPayload,
     CallOutcomePayload,
@@ -43,8 +54,14 @@ from bastion_shared import (
     InterceptBlockedResponse,
     InterceptPendingResponse,
     InterceptRequest,
+    LoginRequest,
+    LogoutRequest,
     PolicyDecisionPayload,
     PolicyResponse,
+    RefreshRequest,
+    TokenPairResponse,
+    UserRole,
+    encode_access_token,
 )
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.exceptions import RequestValidationError
@@ -54,12 +71,48 @@ from . import policy as policy_engine
 from .auth import AuthenticatedAgent, authenticate_agent
 from .config import config
 from .db import db
+from .human_auth import AuthenticatedUser, require_role, verify_password
 from .logging import configure_logging, log
 from .redis_bus import redis_bus
 
 STATIC_DIR = Path(__file__).resolve().parent.parent.parent / "static"
+ALL_ROLES: tuple[UserRole, ...] = ("owner", "admin", "approver", "viewer")
+REFRESH_TOKEN_BYTES = 32
 
 configure_logging()
+
+# Named singletons rather than calling require_role(...) inline in argument
+# defaults — ruff's B008 (mutable-default-style check) flags nested calls
+# even inside an allow-listed Depends(...), and re-creating the closure on
+# every request has no benefit anyway.
+require_admin = Depends(require_role("owner", "admin"))
+require_approver = Depends(require_role("owner", "admin", "approver"))
+require_any_role = Depends(require_role(*ALL_ROLES))
+
+
+@lru_cache(maxsize=1)
+def _private_key_pem() -> str:
+    with open(config.jwt_private_key_path, encoding="utf-8") as f:
+        return f.read()
+
+
+def _hash_refresh_token(raw_token: str) -> str:
+    # Same reasoning as agent API keys (auth.py): a high-entropy random
+    # token is a lookup key, not a password — no need for argon2id here.
+    return hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
+
+
+def _issue_token_pair(user: Any, family_id: UUID) -> tuple[TokenPairResponse, str]:
+    """Returns (response, new_refresh_token_hash) — caller persists the hash."""
+    raw_refresh = secrets.token_urlsafe(REFRESH_TOKEN_BYTES)
+    access_token = encode_access_token(
+        AccessTokenClaims(user_id=user["id"], org_id=user["org_id"], role=user["role"]),
+        _private_key_pem(),
+    )
+    response = TokenPairResponse(
+        access_token=access_token, refresh_token=raw_refresh, role=user["role"]
+    )
+    return response, _hash_refresh_token(raw_refresh)
 
 
 async def _reload_policy_set(policy_set_id: UUID) -> None:
@@ -148,10 +201,108 @@ async def healthz() -> dict[str, str]:
     return {"status": "ok", "service": "interceptor"}
 
 
+@app.post("/auth/login")
+async def login(body: LoginRequest, request: Request) -> TokenPairResponse:
+    user = await db.get_user_by_email(body.email)
+    if user is None or not verify_password(body.password, user["password_hash"]):
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "error": {
+                    "code": "INVALID_CREDENTIALS",
+                    "message": "invalid email or password",
+                    "request_id": request.state.request_id,
+                }
+            },
+        )
+    family_id = uuid.uuid4()
+    response, token_hash = _issue_token_pair(user, family_id)
+    expires_at = datetime.now(UTC) + timedelta(days=config.refresh_token_ttl_days)
+    await db.insert_refresh_token(
+        user_id=user["id"], token_hash=token_hash, family_id=family_id, expires_at=expires_at
+    )
+    return response
+
+
+@app.post("/auth/refresh")
+async def refresh(body: RefreshRequest, request: Request) -> TokenPairResponse:
+    """The reuse-detection mechanism AUTH.md §2 calls "the part interviewers
+    actually probe on": every refresh token is one-time-use. If the token
+    presented here isn't the current unrevoked token for its family — i.e.
+    it was already rotated away (or the family was already revoked) — that
+    can only mean it leaked and is being used in parallel with the
+    legitimate client. The response to that signal is to revoke the
+    *entire* family, not just reject this one request."""
+    presented_hash = _hash_refresh_token(body.refresh_token)
+    record = await db.get_refresh_token_by_hash(presented_hash)
+    if record is None:
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "error": {
+                    "code": "INVALID_REFRESH_TOKEN",
+                    "message": "refresh token not recognized",
+                    "request_id": request.state.request_id,
+                }
+            },
+        )
+    if record["revoked_at"] is not None:
+        await db.revoke_refresh_token_family(record["family_id"])
+        log.warning(
+            "refresh token reuse detected, family revoked", family_id=str(record["family_id"])
+        )
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "error": {
+                    "code": "REFRESH_TOKEN_REUSED",
+                    "message": (
+                        "token reuse detected — all sessions in this family "
+                        "were revoked, log in again"
+                    ),
+                    "request_id": request.state.request_id,
+                }
+            },
+        )
+    if record["expires_at"] < datetime.now(UTC):
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "error": {
+                    "code": "REFRESH_TOKEN_EXPIRED",
+                    "message": "refresh token expired, log in again",
+                    "request_id": request.state.request_id,
+                }
+            },
+        )
+
+    user = await db.get_user_by_id(record["user_id"])
+    assert user is not None
+    response, new_hash = _issue_token_pair(user, record["family_id"])
+    new_expires_at = datetime.now(UTC) + timedelta(days=config.refresh_token_ttl_days)
+    await db.rotate_refresh_token(
+        old_token_id=record["id"],
+        user_id=user["id"],
+        family_id=record["family_id"],
+        new_token_hash=new_hash,
+        expires_at=new_expires_at,
+    )
+    return response
+
+
+@app.post("/auth/logout")
+async def logout(body: LogoutRequest) -> dict[str, str]:
+    record = await db.get_refresh_token_by_hash(_hash_refresh_token(body.refresh_token))
+    if record is not None:
+        await db.revoke_refresh_token_family(record["family_id"])
+    return {"status": "logged_out"}
+
+
 @app.get("/approvals-ui", include_in_schema=False)
 async def approvals_ui() -> FileResponse:
     """Plain HTML/JS approver page (BUILD_PLAN.md Phase 3 — "not the 3D
-    view yet"). Dev/demo tool: no auth until Phase 5, see approvals.html."""
+    view yet"). Dev/demo tool — the underlying API now requires a real
+    access token (Phase 5); the page has a token field, see approvals.html."""
     return FileResponse(STATIC_DIR / "approvals.html")
 
 
@@ -308,7 +459,11 @@ def _policy_response(record: Any) -> PolicyResponse:
 
 
 @app.post("/policies", status_code=201)
-async def create_policy(body: CreatePolicyRequest, request: Request) -> PolicyResponse:
+async def create_policy(
+    body: CreatePolicyRequest,
+    request: Request,
+    user: AuthenticatedUser = require_admin,
+) -> PolicyResponse:
     # Compiled (not just Pydantic-validated) immediately, even though this
     # version isn't active yet — a condition expression outside the safe
     # subset (policy.py's PolicyConditionError) should fail the create call,
@@ -327,19 +482,25 @@ async def create_policy(body: CreatePolicyRequest, request: Request) -> PolicyRe
             },
         ) from exc
     definition_dump = [rule.model_dump(mode="json") for rule in body.definition]
-    record = await db.create_policy(org_id=body.org_id, name=body.name, definition=definition_dump)
+    record = await db.create_policy(org_id=user.org_id, name=body.name, definition=definition_dump)
     return _policy_response(record)
 
 
 @app.get("/policies")
-async def list_policies(org_id: UUID) -> list[PolicyResponse]:
-    records = await db.list_policies(org_id)
+async def list_policies(
+    user: AuthenticatedUser = require_any_role,
+) -> list[PolicyResponse]:
+    records = await db.list_policies(user.org_id)
     return [_policy_response(r) for r in records]
 
 
 @app.post("/policies/{policy_id}/activate")
-async def activate_policy(policy_id: UUID, request: Request) -> PolicyResponse:
-    record = await db.activate_policy(policy_id)
+async def activate_policy(
+    policy_id: UUID,
+    request: Request,
+    user: AuthenticatedUser = require_admin,
+) -> PolicyResponse:
+    record = await db.activate_policy(policy_id, user.org_id)
     if record is None:
         raise HTTPException(
             status_code=404,
@@ -454,17 +615,19 @@ async def get_approval(
 
 
 @app.get("/approvals")
-async def list_pending_approvals(org_id: UUID) -> list[ApprovalRequestResponse]:
-    records = await db.list_pending_approvals_for_org(org_id)
+async def list_pending_approvals(
+    user: AuthenticatedUser = require_any_role,
+) -> list[ApprovalRequestResponse]:
+    records = await db.list_pending_approvals_for_org(user.org_id)
     return [_approval_response(r) for r in records]
 
 
 async def _resolve_approval(
-    approval_id: UUID, status: str, request: Request
+    approval_id: UUID, status: str, request: Request, user: AuthenticatedUser
 ) -> ApprovalRequestResponse:
-    # resolved_by is always None until Phase 5 (no `users` table yet to
-    # reference — see docs/DATA_MODEL.md's approval_requests note).
-    record = await db.resolve_approval(approval_id, status=status, resolved_by=None)
+    record = await db.resolve_approval(
+        approval_id, status=status, resolved_by=user.id, org_id=user.org_id
+    )
     if record is None:
         raise HTTPException(
             status_code=409,
@@ -473,7 +636,7 @@ async def _resolve_approval(
                     "code": "APPROVAL_NOT_PENDING",
                     "message": (
                         f"approval {approval_id} is not pending "
-                        "(already resolved, or does not exist)"
+                        "(already resolved, doesn't exist, or belongs to a different org)"
                     ),
                     "request_id": request.state.request_id,
                 }
@@ -486,13 +649,21 @@ async def _resolve_approval(
 
 
 @app.post("/approvals/{approval_id}/approve")
-async def approve_approval(approval_id: UUID, request: Request) -> ApprovalRequestResponse:
-    return await _resolve_approval(approval_id, "approved", request)
+async def approve_approval(
+    approval_id: UUID,
+    request: Request,
+    user: AuthenticatedUser = require_approver,
+) -> ApprovalRequestResponse:
+    return await _resolve_approval(approval_id, "approved", request, user)
 
 
 @app.post("/approvals/{approval_id}/deny")
-async def deny_approval(approval_id: UUID, request: Request) -> ApprovalRequestResponse:
-    return await _resolve_approval(approval_id, "denied", request)
+async def deny_approval(
+    approval_id: UUID,
+    request: Request,
+    user: AuthenticatedUser = require_approver,
+) -> ApprovalRequestResponse:
+    return await _resolve_approval(approval_id, "denied", request, user)
 
 
 def run() -> None:

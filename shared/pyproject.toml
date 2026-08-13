@@ -3,7 +3,7 @@ name = "bastion-shared"
 version = "0.0.0"
 description = "Single source of truth for the BASTION wire schema — events, policies, /intercept, errors, realtime messages. ARCHITECTURE.md and DATA_MODEL.md map directly onto these models."
 requires-python = ">=3.11"
-dependencies = ["pydantic>=2.9"]
+dependencies = ["pydantic>=2.9", "pyjwt[crypto]>=2.9"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8.3"]
