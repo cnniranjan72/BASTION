@@ -1,0 +1,39 @@
+name: bastion
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: bastion-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: bastion
+      POSTGRES_PASSWORD: bastion
+      POSTGRES_DB: bastion
+    ports:
+      # Host 5432 is commonly taken by other local projects — map to 5442 instead.
+      - '5442:5432'
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U bastion -d bastion']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: bastion-redis
+    restart: unless-stopped
+    ports:
+      - '6379:6379'
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  pgdata:
+  redisdata:

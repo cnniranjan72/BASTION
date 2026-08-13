@@ -1,0 +1,25 @@
+[tool.uv.workspace]
+members = ["shared", "interceptor", "aggregator", "sdk-python"]
+
+[dependency-groups]
+dev = ["ruff>=0.8.4", "mypy>=1.13"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_unused_ignores = true
+
+[tool.pytest.ini_options]
+# Multiple packages in this workspace have same-named test files
+# (test_health.py in both interceptor/ and aggregator/) — importlib mode
+# avoids the sys.path collisions that pytest's legacy rootdir-insertion
+# import mode would hit when running the whole workspace's tests together.
+addopts = "--import-mode=importlib"
+asyncio_mode = "auto"

@@ -1,0 +1,23 @@
+[project]
+name = "bastion-sdk"
+version = "0.0.0"
+description = "BASTION client SDK — wraps agent tool calls and routes them through the interceptor. ARCHITECTURE.md §2.1."
+requires-python = ">=3.11"
+dependencies = ["bastion-shared", "httpx>=0.27", "pydantic>=2.9"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.3", "pytest-asyncio>=0.24"]
+
+[tool.uv.sources]
+bastion-shared = { workspace = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["bastion"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

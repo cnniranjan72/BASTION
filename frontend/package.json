@@ -1,0 +1,9 @@
+{
+  "name": "@bastion/frontend",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Placeholder — the React + react-three-fiber live execution graph is built in Phase 7 (BUILD_PLAN.md), on top of a working replay API. Not scaffolded yet by design: Phases 1-6 come first.",
+  "scripts": {
+    "dev": "echo 'frontend not yet scaffolded — see BUILD_PLAN.md Phase 7' && exit 1"
+  }
+}
