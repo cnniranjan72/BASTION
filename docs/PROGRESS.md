@@ -1,7 +1,7 @@
 # BASTION — Progress Log
 
-## Status: Phase 1 complete
-Phase: 1 (event core + interceptor) → next up: Phase 2 (policy engine, DSL + hot reload)
+## Status: Phase 2 complete
+Phase: 2 (policy engine, DSL + hot reload) → next up: Phase 3 (approval flow)
 
 ## Log
 - [2026-08-14] Project specced out (PRD, ARCHITECTURE, DATA_MODEL, AUTH, API_SPEC, BUILD_PLAN written). No code yet.
@@ -80,19 +80,71 @@ Phase: 1 (event core + interceptor) → next up: Phase 2 (policy engine, DSL + h
     — had to be set in **each package's own** `pyproject.toml`, not just the root one, since pytest
     uses the nearest ini file found, not a merge of all of them up the tree.
 
+- [2026-08-14] Phase 2 complete:
+  - **Spec gap, flagged and resolved**: `agents.default_policy_set_id` (single FK) + "policies
+    versioned as new rows, never mutated" + "hot reload, no restart" don't fit together — activating
+    a new version couldn't change what an agent resolves to without repointing every agent. Added
+    `policy_sets` (stable identity per policy *name*, org-unique) — `policies.policy_set_id` and
+    `agents.default_policy_set_id` both reference it; "the active policy" is always a query, never a
+    fixed row reference. Partial unique index (`policies(policy_set_id) WHERE active`) makes
+    "one active version per set" a DB guarantee. Documented in `docs/DATA_MODEL.md` and
+    `docs/ARCHITECTURE.md` §10. Migration `0002_policies.sql`.
+  - **Safe condition evaluator** (`interceptor/src/bastion_interceptor/policy.py`): condition
+    expressions ("amount > 50") parsed via `ast.parse` and walked by a hand-rolled interpreter over an
+    allow-listed node-type set — never `eval()`. Rejects `__import__`, `open`, lambdas, comprehensions,
+    attribute access, at *compile* time (`POST /policies`, before a bad policy is ever activated), with
+    a proper `INVALID_POLICY_CONDITION` 400 error envelope, not a raw 500.
+  - Policy compiler: YAML/JSON-shaped `PolicyDefinition` → `CompiledPolicy` (precompiled regex +
+    condition AST per rule, first-match-wins evaluation, implicit trailing allow if nothing matches —
+    matches the ARCHITECTURE.md §2.3 example's own trailing `"*" -> allow` convention).
+  - In-memory `PolicyCache` keyed by `policy_set_id`, bootstrapped from all `active` policies at
+    interceptor startup, hot-reloaded via Redis pub/sub (`redis_bus.py`, channel
+    `bastion:policy_updates`) — `POST /policies/{id}/activate` updates its own process's cache
+    synchronously, then publishes so every *other* running instance picks it up too.
+  - `POST /intercept` rewired: real policy lookup (`agent.default_policy_set_id` → cache) replaces
+    Phase 1's hardcoded rule. `require_approval` fails closed (blocked, reason states approval flow
+    lands in Phase 3) rather than half-implementing the workflow — safe default, not silently ignored.
+  - **Spec gap, flagged and resolved**: `GET/POST /policies` are dashboard endpoints, but BUILD_PLAN.md
+    schedules dashboard auth for Phase 5 specifically. Rather than build auth early (out of order) or
+    skip multi-tenancy scoping until Phase 5 (violates CLAUDE.md rule #7 "from day one"), these
+    endpoints take an explicit `org_id` request field for now; Phase 5 only changes where `org_id`
+    comes from. Documented in `docs/ARCHITECTURE.md` §11. Multi-tenancy isolation test written now
+    against this shape (`test_org_cannot_read_another_orgs_policies`), not deferred.
+  - **Milestone test passes**
+    (`test_hot_reload_propagates_via_pubsub_within_a_few_seconds`): a *second*, independent
+    `PolicyCache`+`RedisBus` (simulating another interceptor instance) picks up a policy
+    created+activated via the real API within seconds, over real Redis pub/sub — not just "the same
+    process updated its own dict." 8 new tests total (safe-evaluator unit tests, versioning, intercept
+    integration, hot reload, multi-tenancy isolation); full 21-test workspace suite passes,
+    `ruff`/`mypy --strict` clean.
+  - **Fixed along the way**: the `redis` client (8.1.0, very new) defaults to RESP3 protocol
+    negotiation via `HELLO` on connect, which failed in this environment ("unknown command 'HELLO'")
+    even though the server supports HELLO fine via `redis-cli` directly — looks like a client-side
+    async I/O quirk on Windows, not a real server capability gap. Fixed by pinning `protocol=2` (RESP2)
+    on the connection; plain pub/sub never needed RESP3 anyway. Also added a session-scoped fixture to
+    connect the real `redis_bus` for tests (parallel to the existing `db` pool fixture) — nothing did
+    this before, so `/policies/{id}/activate`'s publish call was hitting an unconnected client.
+  - Also added: DB-layer `jsonb` type codec (`set_type_codec` on the asyncpg pool) so callers pass
+    plain dicts/lists instead of hand-rolling `json.dumps`/`loads` around every jsonb column —
+    refactored in alongside the new policy queries since there are now several.
+
 ## Next up
-- Phase 2: policy YAML DSL + compiler (replacing the hardcoded rule), Redis pub/sub hot-reload to
-  interceptor instances, policy versioning via `POST /policies` (new version, never mutated). Also
-  need to add the FK from `agents.default_policy_set_id` to `policies(id)` once that table exists.
-  Milestone: change a policy via API, see the running interceptor's behavior change within ~1s, no
-  restart.
+- Phase 3: `approval_requests` table, `/approvals` endpoints, interceptor's `pending_approval` path
+  (currently fails closed as a placeholder — see Phase 2 log above) with real long-poll + timeout →
+  default-deny. Simple approver UI (plain table, not the 3D view yet).
+  Milestone: a blocked-pending-approval call actually pauses SDK execution and resumes correctly after
+  a human clicks approve, including the timeout-denies case.
 
 ## Known deviations from BUILD_PLAN.md
-- None in phase *order*. Two implementation-level deviations from the original spec docs, both
-  flagged in code/API_SPEC.md/ARCHITECTURE.md rather than silently guessed: (1) interceptor language
-  (Phase 0, §7), (2) interceptor doesn't proxy the real downstream call, the SDK does (Phase 1, §8).
+- None in phase *order*. Implementation-level deviations from the original spec docs, all flagged in
+  code/API_SPEC.md/ARCHITECTURE.md rather than silently guessed: (1) interceptor language (Phase 0,
+  §7), (2) interceptor doesn't proxy the real downstream call, the SDK does (Phase 1, §8), (3)
+  `policy_sets` added for stable identity across policy versions (Phase 2, §10), (4) policy dashboard
+  endpoints take an explicit `org_id` param until Phase 5 auth lands (Phase 2, §11).
 
 ## Open questions / decisions needed
-- None currently blocking. One thing to revisit in Phase 5: `POST /agents` (dashboard API, needs RBAC)
-  doesn't exist yet — Phase 1's tests insert agents directly via SQL as a stand-in. Confirm this
-  registration flow gets built in Phase 5 alongside the rest of the dashboard API, not deferred further.
+- None currently blocking. Two things to revisit in Phase 5: (1) `POST /agents` (dashboard API, needs
+  RBAC) doesn't exist yet — tests insert agents directly via SQL as a stand-in; confirm this gets built
+  in Phase 5 alongside the rest of the dashboard API. (2) Swap `/policies`' explicit `org_id`
+  param/field for one derived from the authenticated JWT session (§11) — the isolation logic itself
+  shouldn't need to change, only where `org_id` comes from.

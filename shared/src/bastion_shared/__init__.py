@@ -24,6 +24,7 @@ from .intercept import (
     InterceptResponse,
 )
 from .policy import Policy, PolicyDefinition, PolicyMatch, PolicyRule
+from .policy_api import CreatePolicyRequest, PolicyResponse
 from .realtime import (
     EdgeAddedMessage,
     LiveMessage,
@@ -52,6 +53,8 @@ __all__ = [
     "PolicyDefinition",
     "PolicyMatch",
     "PolicyRule",
+    "CreatePolicyRequest",
+    "PolicyResponse",
     "CompleteSpanRequest",
     "CompleteSpanResponse",
     "EdgeAddedMessage",

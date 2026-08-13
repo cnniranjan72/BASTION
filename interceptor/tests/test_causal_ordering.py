@@ -12,8 +12,7 @@ from collections import defaultdict
 from uuid import UUID
 
 import httpx
-import pytest
-from bastion import BastionBlockedError, BastionClient, current_span
+from bastion import BastionClient, current_span
 from bastion_interceptor.db import db
 from bastion_interceptor.main import app
 
@@ -27,24 +26,10 @@ def _make_client(agent_id: UUID, raw_key: str) -> BastionClient:
     )
 
 
-async def _noop() -> str:
-    return "ok"
-
-
-async def test_hardcoded_policy_allows_and_blocks(test_agent: tuple[UUID, str]) -> None:
-    agent_id, raw_key = test_agent
-    async with _make_client(agent_id, raw_key) as client:
-        result = await client.call(
-            "db.query", {"query": "SELECT 1", "database": "production"}, execute=_noop
-        )
-        assert result == "ok"
-
-        with pytest.raises(BastionBlockedError):
-            await client.call(
-                "db.query",
-                {"query": "DELETE FROM users", "database": "production"},
-                execute=_noop,
-            )
+# Allow/block behavior is exercised against the real policy DSL in
+# test_policy_engine.py (Phase 2) — this file only covers causal ordering.
+# No policy is assigned to test_agent by default, so every call here is
+# implicitly allowed (policy.py's documented no-policy-assigned default).
 
 
 async def test_concurrent_nested_calls_reconstruct_causal_graph(

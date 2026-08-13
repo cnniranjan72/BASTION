@@ -119,6 +119,43 @@ This doc originally left the interceptor/aggregator implementation language open
 
 This also shaped the SDK's trace/span propagation: rather than requiring callers to thread `trace_id`/`parent_span_id` through by hand, `sdk-python`'s `BASTION.call()` tracks the current span in a `contextvar`, so a nested `call()` invoked from inside an `execute` callback automatically inherits the right parent — and concurrent children (`asyncio.gather`) each get an independent copy of that context, which is what makes the Phase 1 milestone test's concurrent-nested-calls causality check possible without manual bookkeeping.
 
-## 9. Per-trace sequence numbers under concurrent writers (Phase 1)
+## 10. `policy_sets`: stable identity across policy versions (Phase 2)
+
+Spec gap, flagged rather than silently resolved: DATA_MODEL.md has
+`agents.default_policy_set_id` as a single FK, `policies` versioned as new
+rows ("never edited in place"), and BUILD_PLAN.md's Phase 2 milestone
+requires a policy change via the API to change running interceptor behavior
+with no restart. Taken together these don't fit — if `default_policy_set_id`
+pointed straight at one `policies.id` (a specific version), activating a new
+version would never change what an agent resolves to; every agent referencing
+the old version's id would need to be manually repointed, which contradicts
+"no restart, no manual intervention" hot reload.
+
+**Resolution**: added `policy_sets` (org_id, name, unique per org) — a stable
+identity for a policy *name* across all its versions. `policies.policy_set_id`
+and `agents.default_policy_set_id` both reference `policy_sets(id)`, not each
+other. "The active policy for this agent" is always a query — the row in
+`policies` where `policy_set_id = agent.default_policy_set_id AND active` —
+never a fixed reference to one version. A partial unique index
+(`policies(policy_set_id) WHERE active`) makes "at most one active version
+per set" a DB guarantee, not just application discipline. Documented in
+`docs/DATA_MODEL.md` under `policy_sets`.
+
+## 11. Policy dashboard endpoints are unauthenticated until Phase 5 (Phase 2)
+
+`GET/POST /policies` and `POST /policies/{id}/activate` are part of API_SPEC.md's
+"Human/dashboard API," which BUILD_PLAN.md Phase 5 explicitly describes as
+being *retrofitted* with JWT auth + RBAC ("every dashboard/trace/policy
+endpoint now requires auth + org scoping"). Building real auth now would mean
+skipping ahead of Phase 3/4 in BUILD_PLAN's order for a concern the plan
+already schedules — so for Phase 2, these endpoints take an explicit `org_id`
+request field/param instead of deriving it from a session, with a code
+comment at each call site. This is a deliberate, temporary, and loud gap
+(not a silent one): the multi-tenancy isolation test CLAUDE.md rule #7
+requires ("prove org A cannot read org B's data") is written now, against
+this explicit-`org_id` shape — Phase 5 only changes *where* `org_id` comes
+from (JWT claims instead of a request field), not the isolation logic itself.
+
+## 12. Per-trace sequence numbers under concurrent writers (Phase 1)
 
 DATA_MODEL.md requires `events.sequence_number` to be "strictly increasing per trace." Under concurrent nested calls on the same trace (the exact scenario the Phase 1 milestone test exercises), naively computing `MAX(sequence_number) + 1` and inserting is a race. The fix, in migration `0001_init.sql`: a Postgres function `bastion_next_sequence_number(trace_id)` takes a **transaction-scoped advisory lock** keyed on `hashtextextended(trace_id::text, 0)` (a 64-bit hash, matching `pg_advisory_xact_lock(bigint)` directly) before computing the next value. Concurrent inserts on the *same* trace serialize against each other; inserts on *different* traces essentially never contend (different hash values), so unrelated traces don't block each other. The lock releases automatically on commit/rollback. A `UNIQUE (trace_id, sequence_number)` constraint is a hard backstop in case that reasoning is ever wrong.

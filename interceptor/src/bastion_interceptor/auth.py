@@ -18,6 +18,7 @@ class AuthenticatedAgent:
     id: UUID
     org_id: UUID
     name: str
+    default_policy_set_id: UUID | None
 
 
 def hash_api_key(raw_key: str) -> str:
@@ -51,4 +52,9 @@ async def authenticate_agent(
                 }
             },
         )
-    return AuthenticatedAgent(id=record["id"], org_id=record["org_id"], name=record["name"])
+    return AuthenticatedAgent(
+        id=record["id"],
+        org_id=record["org_id"],
+        name=record["name"],
+        default_policy_set_id=record["default_policy_set_id"],
+    )

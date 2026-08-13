@@ -40,18 +40,39 @@ Event sourcing for everything trace-related. Traditional CRUD for account/policy
 | org_id | uuid fk | |
 | name | text | |
 | api_key_hash | text | |
-| default_policy_set_id | uuid fk | |
+| default_policy_set_id | uuid fk | references `policy_sets(id)`, not a specific `policies` row — see below |
 | created_at | timestamptz | |
+
+### `policy_sets` (added in Phase 2, not in the original spec)
+| column | type | notes |
+|---|---|---|
+| id | uuid pk | |
+| org_id | uuid fk | |
+| name | text | unique per org |
+| created_at | timestamptz | |
+
+**Why this table exists**: the original spec has `agents.default_policy_set_id`
+as a single FK, but also says policies are versioned as new rows ("never
+edited in place") and that hot-reload must update running interceptor
+behavior with no restart. Those three facts are in tension — if
+`default_policy_set_id` pointed straight at one `policies.id`, activating a
+new version could never change what an agent resolves to without manually
+repointing every agent. `policy_sets` gives a policy *name* a stable
+identity across versions: agents and policy rows both point at the set, and
+"the active version of this set" is a query (`policies` filtered on
+`policy_set_id` + `active`), not a fixed row reference. See
+`docs/ARCHITECTURE.md` §10.
 
 ### `policies`
 | column | type | notes |
 |---|---|---|
 | id | uuid pk | |
 | org_id | uuid fk | |
+| policy_set_id | uuid fk | added in Phase 2, see `policy_sets` above |
 | name | text | |
 | version | int | policies are versioned, never edited in place |
 | definition | jsonb | compiled policy DSL |
-| active | boolean | |
+| active | boolean | at most one active row per `policy_set_id` (DB-enforced, partial unique index) |
 | created_at | timestamptz | |
 
 ### `events` (append-only, the event-sourcing core)

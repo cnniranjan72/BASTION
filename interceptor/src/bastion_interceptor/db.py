@@ -10,12 +10,20 @@ from bastion_shared import EventType
 from .config import config
 
 
+async def _init_connection(conn: asyncpg.Connection) -> None:
+    # jsonb <-> Python dict/list automatically, so callers never hand-roll
+    # json.dumps/loads around every query that touches a jsonb column.
+    await conn.set_type_codec("jsonb", encoder=json.dumps, decoder=json.loads, schema="pg_catalog")
+
+
 class Database:
     def __init__(self) -> None:
         self._pool: asyncpg.Pool | None = None
 
     async def connect(self) -> None:
-        self._pool = await asyncpg.create_pool(config.database_url, min_size=1, max_size=10)
+        self._pool = await asyncpg.create_pool(
+            config.database_url, min_size=1, max_size=10, init=_init_connection
+        )
 
     async def close(self) -> None:
         if self._pool is not None:
@@ -31,7 +39,9 @@ class Database:
         return cast(
             "asyncpg.Record | None",
             await self.pool.fetchrow(
-                "SELECT id, org_id, name FROM agents WHERE api_key_hash = $1", api_key_hash
+                "SELECT id, org_id, name, default_policy_set_id FROM agents "
+                "WHERE api_key_hash = $1",
+                api_key_hash,
             ),
         )
 
@@ -59,14 +69,7 @@ class Database:
             VALUES
                 ($1, $2, $3, $4, $5, $6, bastion_next_sequence_number($1))
         """
-        args = (
-            trace_id,
-            span_id,
-            parent_span_id,
-            agent_id,
-            event_type.value,
-            json.dumps(payload),
-        )
+        args = (trace_id, span_id, parent_span_id, agent_id, event_type.value, payload)
         executor = conn if conn is not None else self.pool
         await executor.execute(query, *args)
 
@@ -96,6 +99,85 @@ class Database:
                 span_id,
             ),
         )
+
+    # -- Policies (Phase 2) --------------------------------------------
+
+    async def get_active_policies(self) -> list[asyncpg.Record]:
+        """Bootstraps the in-memory policy cache at startup."""
+        return cast(
+            list[asyncpg.Record],
+            await self.pool.fetch("SELECT * FROM policies WHERE active"),
+        )
+
+    async def get_active_policy_for_set(self, policy_set_id: UUID) -> asyncpg.Record | None:
+        """Used to refresh a single cache entry on a hot-reload pub/sub message."""
+        return cast(
+            "asyncpg.Record | None",
+            await self.pool.fetchrow(
+                "SELECT * FROM policies WHERE policy_set_id = $1 AND active", policy_set_id
+            ),
+        )
+
+    async def list_policies(self, org_id: UUID) -> list[asyncpg.Record]:
+        return cast(
+            list[asyncpg.Record],
+            await self.pool.fetch(
+                "SELECT * FROM policies WHERE org_id = $1 ORDER BY name, version", org_id
+            ),
+        )
+
+    async def create_policy(
+        self, *, org_id: UUID, name: str, definition: list[dict[str, Any]]
+    ) -> asyncpg.Record:
+        """Creates a new version. Never mutates an existing row (DATA_MODEL.md:
+        "policies are versioned, never edited in place"). Resolves (creating
+        if needed) the stable policy_set_id for this (org_id, name) — see
+        docs/ARCHITECTURE.md §10 for why that indirection exists."""
+        async with self.pool.acquire() as conn, conn.transaction():
+            policy_set_id = await conn.fetchval(
+                "SELECT id FROM policy_sets WHERE org_id = $1 AND name = $2", org_id, name
+            )
+            if policy_set_id is None:
+                policy_set_id = await conn.fetchval(
+                    "INSERT INTO policy_sets (org_id, name) VALUES ($1, $2) RETURNING id",
+                    org_id,
+                    name,
+                )
+            next_version = await conn.fetchval(
+                "SELECT COALESCE(MAX(version), 0) + 1 FROM policies WHERE policy_set_id = $1",
+                policy_set_id,
+            )
+            record = await conn.fetchrow(
+                """
+                INSERT INTO policies (org_id, policy_set_id, name, version, definition, active)
+                VALUES ($1, $2, $3, $4, $5, false)
+                RETURNING *
+                """,
+                org_id,
+                policy_set_id,
+                name,
+                next_version,
+                definition,
+            )
+        assert record is not None
+        return record
+
+    async def activate_policy(self, policy_id: UUID) -> asyncpg.Record | None:
+        """Deactivates every other version in the same policy_set_id, then
+        activates this one, atomically — the partial unique index on
+        policies(policy_set_id) WHERE active is the DB-level backstop."""
+        async with self.pool.acquire() as conn, conn.transaction():
+            target = await conn.fetchrow("SELECT * FROM policies WHERE id = $1", policy_id)
+            if target is None:
+                return None
+            await conn.execute(
+                "UPDATE policies SET active = false WHERE policy_set_id = $1",
+                target["policy_set_id"],
+            )
+            record = await conn.fetchrow(
+                "UPDATE policies SET active = true WHERE id = $1 RETURNING *", policy_id
+            )
+        return cast("asyncpg.Record | None", record)
 
 
 db = Database()
