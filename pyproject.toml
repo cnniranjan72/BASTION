@@ -11,10 +11,19 @@ target-version = "py311"
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
 
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI's dependency-injection pattern relies on calling Depends()/Header()
+# etc. in argument defaults — that's the API, not a mutable-default bug.
+extend-immutable-calls = ["fastapi.Depends", "fastapi.Header", "fastapi.Query", "fastapi.Body"]
+
 [tool.mypy]
 python_version = "3.11"
 strict = true
 warn_unused_ignores = true
+
+[[tool.mypy.overrides]]
+module = "asyncpg.*"
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 # Multiple packages in this workspace have same-named test files
@@ -23,3 +32,10 @@ warn_unused_ignores = true
 # import mode would hit when running the whole workspace's tests together.
 addopts = "--import-mode=importlib"
 asyncio_mode = "auto"
+# The interceptor's asyncpg pool is opened once per test session (see
+# interceptor/tests/conftest.py) — pytest-asyncio's default is a fresh event
+# loop per test function, which would leave that pool bound to a different
+# loop than the one running the test ("attached to a different loop"
+# RuntimeError). Session-scoped loop keeps everything on one loop.
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"

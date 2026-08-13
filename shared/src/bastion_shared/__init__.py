@@ -31,6 +31,7 @@ from .realtime import (
     NodeAddedMessage,
     NodeUpdatedMessage,
 )
+from .spans import CompleteSpanRequest, CompleteSpanResponse
 
 __all__ = [
     "BastionError",
@@ -51,6 +52,8 @@ __all__ = [
     "PolicyDefinition",
     "PolicyMatch",
     "PolicyRule",
+    "CompleteSpanRequest",
+    "CompleteSpanResponse",
     "EdgeAddedMessage",
     "LiveMessage",
     "LiveNode",

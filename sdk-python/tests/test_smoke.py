@@ -1,5 +1,8 @@
 import bastion
 
 
-def test_package_imports():
-    assert bastion.__version__ == "0.0.0"
+def test_package_exports_client_and_errors():
+    assert bastion.BastionClient is not None
+    assert bastion.BastionBlockedError is not None
+    assert bastion.BastionPendingApprovalError is not None
+    assert bastion.current_span() is None

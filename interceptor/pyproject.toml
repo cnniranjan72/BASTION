@@ -28,3 +28,7 @@ packages = ["src/bastion_interceptor"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+# See root pyproject.toml's comment: the asyncpg pool is session-scoped
+# (conftest.py) so tests and fixtures must share one event loop.
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"

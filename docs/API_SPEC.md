@@ -37,7 +37,41 @@ Called by the SDK for every tool call.
   "poll_url": "/api/v1/approvals/{id}"
 }
 ```
-Auth: `Authorization: Bearer <agent api key>`
+Auth: `Authorization: Bearer <agent api key>`. The bearer key identifies the
+agent; the request body's `agent_id` must match the authenticated agent or
+the call is rejected (`AGENT_MISMATCH`, 403) — the key alone determines
+identity, `agent_id` in the body is a stated-identity check, not a trust
+source.
+
+### `POST /spans/{span_id}/complete`
+**Not in the original spec — added in Phase 1, see docs/ARCHITECTURE.md §7.**
+
+ARCHITECTURE.md §2.2 describes the interceptor itself "executing the real
+downstream call" when a call is allowed. But neither this doc's
+`InterceptRequest` nor DATA_MODEL.md gives the interceptor anything to reach
+a downstream system with (no target URL, no DSN, no adapter registry) — so
+in practice, **the SDK executes the real call locally** after `/intercept`
+returns `allowed`, then reports the outcome here. This is also why the
+<50ms p99 target (ARCHITECTURE.md §6) is coherent: it measures interceptor
+decision latency only, cleanly separated from the real call's own latency,
+which this endpoint reports back.
+
+Only valid for a `span_id` that `/intercept` most recently returned
+`"allowed"` for; emits `CallCompleted` or `CallFailed`.
+
+```json
+// Request
+{
+  "status": "completed",           // or "failed"
+  "latency_ms": 42.5,
+  "cost": 0.002,                    // optional
+  "result": { "...": "..." },       // optional, opaque
+  "error": null                     // set when status is "failed"
+}
+// Response
+{ "span_id": "uuid", "status": "completed" }
+```
+Auth: `Authorization: Bearer <agent api key>`, same agent-match rule as `/intercept`.
 
 ### `GET /approvals/{id}`
 Poll for resolution of a pending approval (SDK long-polls this, or subscribes via webhook).
