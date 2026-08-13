@@ -12,7 +12,7 @@ threading trace_id/span_id through by hand.
 
 from .client import BastionClient
 from .context import SpanContext, current_span
-from .errors import BastionBlockedError, BastionPendingApprovalError
+from .errors import BastionBlockedError
 
 __version__ = "0.1.0"
 
@@ -21,5 +21,4 @@ __all__ = [
     "SpanContext",
     "current_span",
     "BastionBlockedError",
-    "BastionPendingApprovalError",
 ]

@@ -1,7 +1,7 @@
 # BASTION — Progress Log
 
-## Status: Phase 2 complete
-Phase: 2 (policy engine, DSL + hot reload) → next up: Phase 3 (approval flow)
+## Status: Phase 3 complete
+Phase: 3 (approval flow) → next up: Phase 4 (trace aggregator + replay API)
 
 ## Log
 - [2026-08-14] Project specced out (PRD, ARCHITECTURE, DATA_MODEL, AUTH, API_SPEC, BUILD_PLAN written). No code yet.
@@ -128,23 +128,64 @@ Phase: 2 (policy engine, DSL + hot reload) → next up: Phase 3 (approval flow)
     plain dicts/lists instead of hand-rolling `json.dumps`/`loads` around every jsonb column —
     refactored in alongside the new policy queries since there are now several.
 
+- [2026-08-14] Phase 3 complete:
+  - **Spec tension, flagged and resolved**: ARCHITECTURE.md §2.2 describes the interceptor itself
+    long-polling/webhook-waiting for an approval decision, but API_SPEC.md separately defines
+    `GET /approvals/{id}` whose own doc comment says the SDK long-polls *that*. Holding `/intercept`
+    open for a human-timescale (potentially minutes) decision would also break the stateless,
+    horizontally-scalable hot-path story. Decision: `/intercept` returns `pending_approval` immediately
+    (never blocks); `GET /approvals/{id}` is the real long-poll target, woken by a Redis pub/sub signal
+    (not busy-polling Postgres) but always re-checking Postgres as the source of truth after the wait
+    either way. Documented in `docs/ARCHITECTURE.md` §13 and `API_SPEC.md`.
+  - `approval_requests` table (migration `0003_approvals.sql`) exactly per DATA_MODEL.md;
+    `resolved_by` FK to `users(id)` deferred to Phase 5 (table doesn't exist yet), same pattern as
+    `agents.default_policy_set_id` in Phase 1.
+  - **Timeout mechanism**: an absolute deadline (`APPROVAL_TTL_SECONDS`, default 300s) checked lazily
+    on each `GET /approvals/{id}` call rather than a background sweeper — the same request that would
+    otherwise report "still pending" instead atomically flips the row to `timed_out`
+    (`db.expire_stale_approval`, guarded so only one caller ever wins) and emits `ApprovalDenied`.
+  - `POST /policies/{id}/approve` / `/deny`: only transition a genuinely `pending` row (409
+    `APPROVAL_NOT_PENDING` otherwise — two approvers racing isn't a silent overwrite), emit
+    `ApprovalGranted`/`ApprovalDenied`, publish the Redis wake-up signal. `resolved_by` always `null`
+    until Phase 5 (no `users` table).
+  - **Event modeling fix**: a span resolved via approval never gets its own `CallAllowed` event —
+    `ApprovalGranted` *is* that decision. Had to extend `db.get_span_decision` (used by
+    `POST /spans/{id}/complete`) to treat `ApprovalGranted`/`ApprovalDenied` as the allowed/blocked
+    equivalents — caught by the milestone test itself (`/spans/.../complete` 404'd on approved-then-
+    executed calls until this was fixed).
+  - SDK (`sdk-python/bastion/client.py`): `pending_approval` no longer raises immediately — `call()`
+    polls `GET /approvals/{id}` in a loop (server-side long-poll each time) until resolved or its own
+    `approval_max_wait` budget (default 60s) elapses, then either proceeds to `execute()` (approved) or
+    raises `BastionBlockedError` (denied/timed_out/budget exceeded) — `execute()` is never invoked on
+    any non-approved outcome. Removed the now-dead `BastionPendingApprovalError`.
+  - Minimal plain HTML/JS approver page at `GET /approvals-ui` (BUILD_PLAN.md's own "not the 3D view
+    yet" framing for this phase) — org_id text field (no auth yet), table of pending approvals,
+    approve/deny buttons calling the real JSON API. No build step, no frontend/ toolchain involved.
+  - **Milestone tests pass** (`interceptor/tests/test_approval_flow.py`, 3 tests): (1) a paused SDK call
+    genuinely blocks (`execute()` not yet run, asyncio task not done) until a concurrent approve call
+    resolves it, then resumes and returns the real result; (2) explicit human denial raises
+    `BastionBlockedError` with `execute()` never invoked; (3) an unresolved approval past a
+    (test-shortened, via `object.__setattr__` on the frozen `Config` singleton) TTL is discovered as
+    `timed_out` and denies. Full 24-test workspace suite passes, `ruff`/`mypy --strict` clean.
+
 ## Next up
-- Phase 3: `approval_requests` table, `/approvals` endpoints, interceptor's `pending_approval` path
-  (currently fails closed as a placeholder — see Phase 2 log above) with real long-poll + timeout →
-  default-deny. Simple approver UI (plain table, not the 3D view yet).
-  Milestone: a blocked-pending-approval call actually pauses SDK execution and resumes correctly after
-  a human clicks approve, including the timeout-denies case.
+- Phase 4: trace aggregator service — subscribe to the event stream, build in-memory graphs per active
+  trace, persist `trace_summaries` (read-model/projection, rebuildable from `events`) on completion.
+  `GET /traces/{id}` full replay endpoint (folded event stream + graph). Milestone: pull up any past
+  trace via API and get a complete, correctly-ordered causal graph as JSON.
 
 ## Known deviations from BUILD_PLAN.md
 - None in phase *order*. Implementation-level deviations from the original spec docs, all flagged in
   code/API_SPEC.md/ARCHITECTURE.md rather than silently guessed: (1) interceptor language (Phase 0,
   §7), (2) interceptor doesn't proxy the real downstream call, the SDK does (Phase 1, §8), (3)
   `policy_sets` added for stable identity across policy versions (Phase 2, §10), (4) policy dashboard
-  endpoints take an explicit `org_id` param until Phase 5 auth lands (Phase 2, §11).
+  endpoints take an explicit `org_id` param until Phase 5 auth lands (Phase 2, §11), (5) `/intercept`
+  never blocks for approval, `GET /approvals/{id}` is the real long-poll target (Phase 3, §13).
 
 ## Open questions / decisions needed
-- None currently blocking. Two things to revisit in Phase 5: (1) `POST /agents` (dashboard API, needs
+- None currently blocking. Three things to revisit in Phase 5: (1) `POST /agents` (dashboard API, needs
   RBAC) doesn't exist yet — tests insert agents directly via SQL as a stand-in; confirm this gets built
-  in Phase 5 alongside the rest of the dashboard API. (2) Swap `/policies`' explicit `org_id`
-  param/field for one derived from the authenticated JWT session (§11) — the isolation logic itself
-  shouldn't need to change, only where `org_id` comes from.
+  in Phase 5 alongside the rest of the dashboard API. (2) Swap `/policies`' and `/approvals`' explicit
+  `org_id` param/field for one derived from the authenticated JWT session (§11) — the isolation logic
+  itself shouldn't need to change, only where `org_id` comes from. (3) Populate `approval_requests.
+  resolved_by` once real user sessions exist; add the deferred FK to `users(id)`.

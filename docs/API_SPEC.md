@@ -29,7 +29,8 @@ Called by the SDK for every tool call.
   "policy_id": "uuid",
   "reason": "amount exceeds $50 auto-approve threshold and no approval configured"
 }
-// Response (pending approval — long-poll up to N seconds, then timeout)
+// Response (pending approval — returns immediately, does NOT block;
+// see "long-poll lives on GET /approvals/{id}" below)
 {
   "span_id": "uuid",
   "decision": "pending_approval",
@@ -37,6 +38,10 @@ Called by the SDK for every tool call.
   "poll_url": "/api/v1/approvals/{id}"
 }
 ```
+**`pending_approval` never blocks this call** — see docs/ARCHITECTURE.md §13
+for why holding `/intercept` open for a human-timescale decision would break
+the stateless, horizontally-scalable hot-path story. The actual long-poll is
+`GET /approvals/{id}` below; the SDK calls it in a loop.
 Auth: `Authorization: Bearer <agent api key>`. The bearer key identifies the
 agent; the request body's `agent_id` must match the authenticated agent or
 the call is rejected (`AGENT_MISMATCH`, 403) — the key alone determines
@@ -74,23 +79,70 @@ Only valid for a `span_id` that `/intercept` most recently returned
 Auth: `Authorization: Bearer <agent api key>`, same agent-match rule as `/intercept`.
 
 ### `GET /approvals/{id}`
-Poll for resolution of a pending approval (SDK long-polls this, or subscribes via webhook).
+The SDK's actual long-poll target (not `/intercept` — see above and
+docs/ARCHITECTURE.md §13). Blocks up to `APPROVAL_LONG_POLL_SECONDS`
+(default 25s) waiting for a resolution; returns the current status either
+way (still `"pending"` if the window elapsed with no decision — the SDK
+calls again). Woken early by a Redis pub/sub signal from approve/deny/expiry,
+not busy-polling. Past the approval's absolute deadline
+(`APPROVAL_TTL_SECONDS`, default 300s), this call itself flips it to
+`"timed_out"` (checked lazily here, not by a background sweeper) and emits
+`ApprovalDenied`.
+Auth: `Authorization: Bearer <agent api key>` — the span's original agent, same
+`AGENT_MISMATCH` rule as `/intercept`.
+```json
+// Response
+{
+  "id": "uuid", "trace_id": "uuid", "span_id": "uuid",
+  "status": "pending",              // | "approved" | "denied" | "timed_out"
+  "requested_at": "2026-01-01T00:00:00Z",
+  "resolved_by": null,               // always null until Phase 5 (no users table yet)
+  "resolved_at": null
+}
+```
 
 ## Human/dashboard API
+
+**Unauthenticated until Phase 5** (docs/ARCHITECTURE.md §11, §13) — every
+endpoint below takes an explicit `org_id` param/field instead of deriving it
+from a session, since JWT auth + RBAC is Phase 5's job by BUILD_PLAN.md's own
+order. Multi-tenancy isolation is still enforced now, just against this
+explicit-`org_id` shape (Phase 5 only changes where `org_id` comes from).
 
 ### Auth
 - `POST /auth/login` — email/password → access + refresh token
 - `POST /auth/refresh` — refresh token → new access + refresh token pair (rotation, see AUTH.md)
 - `POST /auth/logout` — revoke current refresh token family
 
+**Not yet built (Phase 5).**
+
 ### Agents & Policies
-- `GET /agents` / `POST /agents` / `GET /agents/{id}`
-- `GET /policies` / `POST /policies` (creates new version) / `POST /policies/{id}/activate`
+- `GET /agents` / `POST /agents` / `GET /agents/{id}` — **not yet built (Phase 5)**; until
+  then, agents are inserted directly via SQL (see `docs/PROGRESS.md`).
+- `POST /policies` — body: `{ "org_id": "uuid", "name": "...", "definition": [...] }`.
+  Creates a new version (never mutates); compiles the definition immediately
+  (400 `INVALID_POLICY_CONDITION` on an unsafe/malformed condition expression,
+  not a 500) even though it isn't active yet.
+- `GET /policies?org_id=uuid` — all versions for an org.
+- `POST /policies/{id}/activate` — deactivates every other version in the same
+  policy set, activates this one, hot-reloads every interceptor instance via
+  Redis pub/sub (no restart).
 
 ### Approvals
-- `GET /approvals?status=pending` — queue for the approver UI
+- `GET /approvals?org_id=uuid` — pending approvals for an org (BUILD_PLAN.md's
+  `?status=pending` is implicit: this endpoint only ever returns pending ones).
 - `POST /approvals/{id}/approve`
 - `POST /approvals/{id}/deny`
+
+Both approve/deny return the updated `ApprovalRequestResponse` shape (above);
+`resolved_by` is always `null` until Phase 5. A 409 `APPROVAL_NOT_PENDING` if
+the approval was already resolved (or never existed) — resolution only ever
+transitions a genuinely `pending` row, so two approvers racing each other
+isn't a silent overwrite.
+
+A plain HTML/JS approver page (no build step, no 3D view — BUILD_PLAN.md
+Phase 3 explicitly calls this out as the acceptable interim UI) is served at
+`GET /approvals-ui`.
 
 ### Traces
 - `GET /traces?agent_id=&status=&from=&to=` — list/search

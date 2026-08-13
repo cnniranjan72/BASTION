@@ -10,6 +10,15 @@ class Config:
     database_url: str
     redis_url: str
     env: str
+    # Phase 3 approval flow. Absolute deadline for a pending approval before
+    # it's force-transitioned to timed_out (checked lazily on each
+    # GET /approvals/{id} long-poll, not by a background sweeper — see
+    # docs/ARCHITECTURE.md's approval-flow section). Long-poll wait is how
+    # long a single GET /approvals/{id} call blocks before returning
+    # "still pending" — short enough that HTTP connections/load balancers
+    # don't mind, the SDK just calls again.
+    approval_ttl_seconds: float
+    approval_long_poll_seconds: float
 
 
 def load_config() -> Config:
@@ -20,6 +29,8 @@ def load_config() -> Config:
         ),
         redis_url=os.environ.get("REDIS_URL", "redis://localhost:6379"),
         env=os.environ.get("NODE_ENV", "development"),
+        approval_ttl_seconds=float(os.environ.get("APPROVAL_TTL_SECONDS", "300")),
+        approval_long_poll_seconds=float(os.environ.get("APPROVAL_LONG_POLL_SECONDS", "25")),
     )
 
 

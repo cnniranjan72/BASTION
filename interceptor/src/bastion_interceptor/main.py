@@ -10,6 +10,14 @@ via Redis pub/sub (redis_bus.py) so a policy change takes effect on every
 running interceptor instance with no restart (BUILD_PLAN.md Phase 2
 milestone). Dashboard endpoints (POST/GET /policies, activate) are
 unauthenticated for now — see docs/ARCHITECTURE.md §11.
+
+Phase 3: require_approval creates an approval_requests row and returns
+pending_approval immediately — /intercept itself never blocks for a
+human-timescale decision (that would break the stateless, horizontally
+scalable hot-path story). GET /approvals/{id} is the actual long-poll
+target the SDK calls in a loop; it's woken by a Redis pub/sub signal rather
+than busy-polling Postgres, but Postgres is still the source of truth for
+what happened. See docs/ARCHITECTURE.md's approval-flow section.
 """
 
 from __future__ import annotations
@@ -18,11 +26,13 @@ import time
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
-from typing import Any
+from pathlib import Path
+from typing import Any, Literal
 from uuid import UUID
 
 import structlog
 from bastion_shared import (
+    ApprovalRequestResponse,
     CallAttemptedPayload,
     CallOutcomePayload,
     CompleteSpanRequest,
@@ -31,13 +41,14 @@ from bastion_shared import (
     EventType,
     InterceptAllowedResponse,
     InterceptBlockedResponse,
+    InterceptPendingResponse,
     InterceptRequest,
     PolicyDecisionPayload,
     PolicyResponse,
 )
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 
 from . import policy as policy_engine
 from .auth import AuthenticatedAgent, authenticate_agent
@@ -45,6 +56,8 @@ from .config import config
 from .db import db
 from .logging import configure_logging, log
 from .redis_bus import redis_bus
+
+STATIC_DIR = Path(__file__).resolve().parent.parent.parent / "static"
 
 configure_logging()
 
@@ -135,12 +148,19 @@ async def healthz() -> dict[str, str]:
     return {"status": "ok", "service": "interceptor"}
 
 
+@app.get("/approvals-ui", include_in_schema=False)
+async def approvals_ui() -> FileResponse:
+    """Plain HTML/JS approver page (BUILD_PLAN.md Phase 3 — "not the 3D
+    view yet"). Dev/demo tool: no auth until Phase 5, see approvals.html."""
+    return FileResponse(STATIC_DIR / "approvals.html")
+
+
 @app.post("/intercept")
 async def intercept(
     body: InterceptRequest,
     request: Request,
     agent: AuthenticatedAgent = Depends(authenticate_agent),
-) -> InterceptAllowedResponse | InterceptBlockedResponse:
+) -> InterceptAllowedResponse | InterceptBlockedResponse | InterceptPendingResponse:
     if body.agent_id != agent.id:
         raise HTTPException(
             status_code=403,
@@ -168,15 +188,27 @@ async def intercept(
     decision = policy_engine.evaluate(compiled_policy, body.tool_name, body.args)
     policy_id = compiled_policy.policy_id if compiled_policy is not None else None
 
-    # require_approval isn't implemented until Phase 3 (the long-poll +
-    # human-decision workflow). Fails closed rather than silently allowing
-    # or half-implementing the flow — an unimplemented approval defaults to
-    # deny, consistent with the product's own "block dangerous actions by
-    # default" premise.
-    if decision.action in ("block", "require_approval"):
+    if decision.action == "require_approval":
+        await db.insert_event(
+            trace_id=body.trace_id,
+            span_id=span_id,
+            parent_span_id=body.parent_span_id,
+            agent_id=agent.id,
+            event_type=EventType.CALL_PENDING_APPROVAL,
+            payload=PolicyDecisionPayload(
+                policy_id=policy_id, decision="pending_approval", reason=decision.reason
+            ).model_dump(mode="json"),
+        )
+        approval = await db.insert_approval_request(trace_id=body.trace_id, span_id=span_id)
+        log.info("call pending approval", tool_name=body.tool_name, span_id=str(span_id))
+        return InterceptPendingResponse(
+            span_id=span_id,
+            approval_request_id=approval["id"],
+            poll_url=f"/approvals/{approval['id']}",
+        )
+
+    if decision.action == "block":
         reason = decision.reason or "blocked by policy"
-        if decision.action == "require_approval":
-            reason = "approval required — approval flow lands in Phase 3, failing closed"
         await db.insert_event(
             trace_id=body.trace_id,
             span_id=span_id,
@@ -234,7 +266,9 @@ async def complete_span(
                 }
             },
         )
-    if span["event_type"] != EventType.CALL_ALLOWED.value:
+    # ApprovalGranted is the "allowed" outcome for a span resolved via the
+    # approval flow (Phase 3) — it never gets its own separate CallAllowed.
+    if span["event_type"] not in (EventType.CALL_ALLOWED.value, EventType.APPROVAL_GRANTED.value):
         raise HTTPException(
             status_code=409,
             detail={
@@ -325,6 +359,140 @@ async def activate_policy(policy_id: UUID, request: Request) -> PolicyResponse:
     # *other* running interceptor instance picks it up too, with no restart.
     await redis_bus.publish_policy_update(record["policy_set_id"])
     return _policy_response(record)
+
+
+def _approval_response(record: Any) -> ApprovalRequestResponse:
+    return ApprovalRequestResponse(
+        id=record["id"],
+        trace_id=record["trace_id"],
+        span_id=record["span_id"],
+        status=record["status"],
+        requested_at=record["requested_at"],
+        resolved_by=record["resolved_by"],
+        resolved_at=record["resolved_at"],
+    )
+
+
+_APPROVAL_EVENT_DECISION: dict[EventType, Literal["allowed", "blocked"]] = {
+    EventType.APPROVAL_GRANTED: "allowed",
+    EventType.APPROVAL_DENIED: "blocked",
+}
+
+
+async def _emit_approval_resolution_event(
+    record: Any, event_type: EventType, reason: str | None
+) -> None:
+    lineage = await db.get_span_lineage(record["span_id"])
+    if lineage is None:
+        return
+    await db.insert_event(
+        trace_id=record["trace_id"],
+        span_id=record["span_id"],
+        parent_span_id=lineage["parent_span_id"],
+        agent_id=lineage["agent_id"],
+        event_type=event_type,
+        payload=PolicyDecisionPayload(
+            policy_id=None, decision=_APPROVAL_EVENT_DECISION[event_type], reason=reason
+        ).model_dump(mode="json"),
+    )
+
+
+@app.get("/approvals/{approval_id}")
+async def get_approval(
+    approval_id: UUID,
+    request: Request,
+    agent: AuthenticatedAgent = Depends(authenticate_agent),
+) -> ApprovalRequestResponse:
+    """The SDK's actual long-poll target (not /intercept — see module
+    docstring). Blocks up to config.approval_long_poll_seconds if still
+    pending, woken early by a Redis signal from approve/deny; the SDK calls
+    this in a loop until the status is no longer "pending" or its own
+    overall budget elapses (docs/ARCHITECTURE.md's approval-flow section)."""
+    record = await db.get_approval_request(approval_id)
+    if record is None:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": {
+                    "code": "APPROVAL_NOT_FOUND",
+                    "message": f"no approval {approval_id}",
+                    "request_id": request.state.request_id,
+                }
+            },
+        )
+
+    lineage = await db.get_span_lineage(record["span_id"])
+    if lineage is None or lineage["agent_id"] != agent.id:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": {
+                    "code": "AGENT_MISMATCH",
+                    "message": "approval belongs to a different agent",
+                    "request_id": request.state.request_id,
+                }
+            },
+        )
+
+    if record["status"] == "pending":
+        # Result deliberately ignored: whether this returns True (woken by
+        # a signal) or False (timed out), Postgres below is re-checked as
+        # the source of truth either way — see redis_bus.wait_for_approval_signal.
+        await redis_bus.wait_for_approval_signal(approval_id, config.approval_long_poll_seconds)
+        expired = await db.expire_stale_approval(approval_id, config.approval_ttl_seconds)
+        if expired is not None:
+            await _emit_approval_resolution_event(
+                expired, EventType.APPROVAL_DENIED, "approval timed out"
+            )
+            record = expired
+        else:
+            refreshed = await db.get_approval_request(approval_id)
+            assert refreshed is not None
+            record = refreshed
+
+    return _approval_response(record)
+
+
+@app.get("/approvals")
+async def list_pending_approvals(org_id: UUID) -> list[ApprovalRequestResponse]:
+    records = await db.list_pending_approvals_for_org(org_id)
+    return [_approval_response(r) for r in records]
+
+
+async def _resolve_approval(
+    approval_id: UUID, status: str, request: Request
+) -> ApprovalRequestResponse:
+    # resolved_by is always None until Phase 5 (no `users` table yet to
+    # reference — see docs/DATA_MODEL.md's approval_requests note).
+    record = await db.resolve_approval(approval_id, status=status, resolved_by=None)
+    if record is None:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": {
+                    "code": "APPROVAL_NOT_PENDING",
+                    "message": (
+                        f"approval {approval_id} is not pending "
+                        "(already resolved, or does not exist)"
+                    ),
+                    "request_id": request.state.request_id,
+                }
+            },
+        )
+    event_type = EventType.APPROVAL_GRANTED if status == "approved" else EventType.APPROVAL_DENIED
+    await _emit_approval_resolution_event(record, event_type, None)
+    await redis_bus.publish_approval_resolved(approval_id)
+    return _approval_response(record)
+
+
+@app.post("/approvals/{approval_id}/approve")
+async def approve_approval(approval_id: UUID, request: Request) -> ApprovalRequestResponse:
+    return await _resolve_approval(approval_id, "approved", request)
+
+
+@app.post("/approvals/{approval_id}/deny")
+async def deny_approval(approval_id: UUID, request: Request) -> ApprovalRequestResponse:
+    return await _resolve_approval(approval_id, "denied", request)
 
 
 def run() -> None:

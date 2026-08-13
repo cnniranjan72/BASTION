@@ -18,7 +18,7 @@ import httpx
 from bastion_shared import InterceptRequest
 
 from .context import SpanContext, current_span, reset_current_span, set_current_span
-from .errors import BastionBlockedError, BastionPendingApprovalError
+from .errors import BastionBlockedError
 
 T = TypeVar("T")
 
@@ -40,12 +40,22 @@ class BastionClient:
         agent_id: UUID | str,
         transport: httpx.AsyncBaseTransport | None = None,
         timeout: float = 10.0,
+        approval_max_wait: float = 60.0,
     ) -> None:
         self.agent_id = UUID(str(agent_id))
+        # Overall client-side budget for a pending_approval call — past this,
+        # treated as denied (fail closed) even if the server-side long-poll
+        # in _wait_for_approval keeps returning "still pending".
+        self._approval_max_wait = approval_max_wait
         self._http = httpx.AsyncClient(
             base_url=base_url,
             transport=transport,
-            timeout=timeout,
+            # A pending_approval call legitimately blocks on GET
+            # /approvals/{id}'s server-side long-poll (config.
+            # approval_long_poll_seconds, ~25s by default) — the HTTP
+            # client's own timeout must comfortably exceed that, independent
+            # of the general request timeout used for /intercept itself.
+            timeout=httpx.Timeout(timeout, read=max(timeout, approval_max_wait + 30.0)),
             headers={"Authorization": f"Bearer {api_key}"},
         )
 
@@ -88,10 +98,11 @@ class BastionClient:
                 policy_id=UUID(body["policy_id"]) if body.get("policy_id") else None,
             )
         if body["decision"] == "pending_approval":
-            raise BastionPendingApprovalError(
-                span_id=UUID(body["span_id"]),
-                approval_request_id=UUID(body["approval_request_id"]),
-            )
+            # Blocks (via repeated calls to the server-side long-poll) until
+            # approved, or raises BastionBlockedError for denied/timed_out/
+            # this client's own budget exceeded — approved is the only path
+            # that reaches the execute() call below.
+            await self._wait_for_approval(body["poll_url"])
 
         span_id = UUID(body["span_id"])
         token = set_current_span(SpanContext(trace_id=trace_id, span_id=span_id))
@@ -106,6 +117,30 @@ class BastionClient:
             return result
         finally:
             reset_current_span(token)
+
+    async def _wait_for_approval(self, poll_url: str) -> None:
+        deadline = time.monotonic() + self._approval_max_wait
+        while True:
+            response = await self._http.get(poll_url)
+            response.raise_for_status()
+            body = response.json()
+            status = body["status"]
+
+            if status == "approved":
+                return
+            if status in ("denied", "timed_out"):
+                raise BastionBlockedError(
+                    reason=f"approval {status}", span_id=UUID(body["span_id"]), policy_id=None
+                )
+            # Still "pending": GET /approvals/{id} already blocked server-side
+            # for a while (its own long-poll window) before returning this —
+            # only loop again if there's budget left, otherwise fail closed.
+            if time.monotonic() >= deadline:
+                raise BastionBlockedError(
+                    reason="approval timed out waiting for a decision",
+                    span_id=UUID(body["span_id"]),
+                    policy_id=None,
+                )
 
     async def _report_completion(
         self,

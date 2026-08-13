@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>BASTION — Pending Approvals</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 960px; margin: 2rem auto; padding: 0 1rem; color: #1a1a1a; }
+  h1 { font-size: 1.25rem; }
+  .notice { background: #fff3cd; border: 1px solid #ffe69c; padding: 0.5rem 0.75rem; border-radius: 4px; font-size: 0.85rem; margin-bottom: 1rem; }
+  table { width: 100%; border-collapse: collapse; margin-top: 1rem; }
+  th, td { text-align: left; padding: 0.5rem; border-bottom: 1px solid #ddd; font-size: 0.9rem; }
+  button { cursor: pointer; padding: 0.3rem 0.7rem; border-radius: 4px; border: 1px solid #ccc; background: #f5f5f5; }
+  button.approve { background: #16a34a; color: white; border-color: #16a34a; }
+  button.deny { background: #dc2626; color: white; border-color: #dc2626; }
+  input { padding: 0.3rem 0.5rem; }
+  #status { font-size: 0.85rem; color: #666; margin-top: 0.5rem; }
+</style>
+</head>
+<body>
+  <h1>BASTION — Pending Approvals</h1>
+  <p class="notice">
+    Plain HTML/JS approver page, per BUILD_PLAN.md Phase 3 ("not the 3D view yet"). No auth exists
+    until Phase 5, so this takes an explicit org_id instead of a session (see docs/ARCHITECTURE.md §11)
+    — dev/demo tool only.
+  </p>
+  <div>
+    <label for="orgId">org_id:</label>
+    <input id="orgId" size="38" placeholder="00000000-0000-0000-0000-000000000000" />
+    <button id="load">Load pending approvals</button>
+  </div>
+  <table id="table" hidden>
+    <thead>
+      <tr><th>id</th><th>trace_id</th><th>span_id</th><th>requested_at</th><th></th></tr>
+    </thead>
+    <tbody id="rows"></tbody>
+  </table>
+  <div id="status"></div>
+
+<script>
+const statusEl = document.getElementById('status');
+const tableEl = document.getElementById('table');
+const rowsEl = document.getElementById('rows');
+
+async function loadApprovals() {
+  const orgId = document.getElementById('orgId').value.trim();
+  if (!orgId) { statusEl.textContent = 'Enter an org_id.'; return; }
+  statusEl.textContent = 'Loading...';
+  const res = await fetch(`/approvals?org_id=${encodeURIComponent(orgId)}`);
+  if (!res.ok) { statusEl.textContent = `Error: ${res.status}`; return; }
+  const approvals = await res.json();
+  rowsEl.innerHTML = '';
+  for (const a of approvals) {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${a.id}</td>
+      <td>${a.trace_id}</td>
+      <td>${a.span_id}</td>
+      <td>${a.requested_at}</td>
+      <td>
+        <button class="approve" data-id="${a.id}" data-action="approve">Approve</button>
+        <button class="deny" data-id="${a.id}" data-action="deny">Deny</button>
+      </td>`;
+    rowsEl.appendChild(tr);
+  }
+  tableEl.hidden = approvals.length === 0;
+  statusEl.textContent = approvals.length
+    ? `${approvals.length} pending approval(s).`
+    : 'No pending approvals for this org.';
+}
+
+rowsEl.addEventListener('click', async (event) => {
+  const button = event.target.closest('button[data-action]');
+  if (!button) return;
+  const { id, action } = button.dataset;
+  button.disabled = true;
+  const res = await fetch(`/approvals/${id}/${action}`, { method: 'POST' });
+  statusEl.textContent = res.ok ? `Approval ${id} ${action}d.` : `Error: ${res.status}`;
+  await loadApprovals();
+});
+
+document.getElementById('load').addEventListener('click', loadApprovals);
+</script>
+</body>
+</html>

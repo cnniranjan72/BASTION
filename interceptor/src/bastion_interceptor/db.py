@@ -82,17 +82,21 @@ class Database:
         )
 
     async def get_span_decision(self, span_id: UUID) -> asyncpg.Record | None:
-        """The most recent CallAllowed/CallBlocked event for a span — used to
+        """The most recent terminal decision event for a span — used to
         recover trace_id/agent_id/parent_span_id for /spans/{id}/complete and
         to confirm the span was actually allowed before letting it complete.
-        """
+        ApprovalGranted/ApprovalDenied count as CallAllowed/CallBlocked
+        equivalents: a span resolved via the approval flow never gets its
+        own separate CallAllowed event (Phase 3, see main.py)."""
         return cast(
             "asyncpg.Record | None",
             await self.pool.fetchrow(
                 """
                 SELECT trace_id, span_id, parent_span_id, agent_id, event_type
                 FROM events
-                WHERE span_id = $1 AND event_type IN ('CallAllowed', 'CallBlocked')
+                WHERE span_id = $1
+                  AND event_type IN
+                      ('CallAllowed', 'CallBlocked', 'ApprovalGranted', 'ApprovalDenied')
                 ORDER BY sequence_number DESC
                 LIMIT 1
                 """,
@@ -178,6 +182,96 @@ class Database:
                 "UPDATE policies SET active = true WHERE id = $1 RETURNING *", policy_id
             )
         return cast("asyncpg.Record | None", record)
+
+    # -- Approvals (Phase 3) --------------------------------------------
+
+    async def get_span_lineage(self, span_id: UUID) -> asyncpg.Record | None:
+        """parent_span_id + agent_id from this span's CallAttempted event —
+        every span has exactly one. Used to authorize GET /approvals/{id}
+        (agent match) and to correctly link ApprovalGranted/ApprovalDenied
+        follow-up events into the same causal graph position."""
+        return cast(
+            "asyncpg.Record | None",
+            await self.pool.fetchrow(
+                "SELECT parent_span_id, agent_id FROM events "
+                "WHERE span_id = $1 AND event_type = 'CallAttempted'",
+                span_id,
+            ),
+        )
+
+    async def insert_approval_request(self, *, trace_id: UUID, span_id: UUID) -> asyncpg.Record:
+        record = await self.pool.fetchrow(
+            "INSERT INTO approval_requests (trace_id, span_id) VALUES ($1, $2) RETURNING *",
+            trace_id,
+            span_id,
+        )
+        assert record is not None
+        return record
+
+    async def get_approval_request(self, approval_id: UUID) -> asyncpg.Record | None:
+        return cast(
+            "asyncpg.Record | None",
+            await self.pool.fetchrow("SELECT * FROM approval_requests WHERE id = $1", approval_id),
+        )
+
+    async def expire_stale_approval(
+        self, approval_id: UUID, ttl_seconds: float
+    ) -> asyncpg.Record | None:
+        """Lazily flips a pending approval past its absolute deadline to
+        timed_out — checked on each long-poll rather than via a background
+        sweeper (see docs/ARCHITECTURE.md's approval-flow section). No-op
+        (returns None) if not yet expired or already resolved."""
+        return cast(
+            "asyncpg.Record | None",
+            await self.pool.fetchrow(
+                """
+                UPDATE approval_requests
+                SET status = 'timed_out'
+                WHERE id = $1 AND status = 'pending'
+                  AND requested_at < now() - make_interval(secs => $2)
+                RETURNING *
+                """,
+                approval_id,
+                ttl_seconds,
+            ),
+        )
+
+    async def resolve_approval(
+        self, approval_id: UUID, *, status: str, resolved_by: UUID | None
+    ) -> asyncpg.Record | None:
+        """Only transitions a *pending* request — the WHERE guard makes
+        double-resolution (two approvers racing) a no-op for the loser
+        rather than silently overwriting who actually resolved it."""
+        return cast(
+            "asyncpg.Record | None",
+            await self.pool.fetchrow(
+                """
+                UPDATE approval_requests
+                SET status = $2, resolved_by = $3, resolved_at = now()
+                WHERE id = $1 AND status = 'pending'
+                RETURNING *
+                """,
+                approval_id,
+                status,
+                resolved_by,
+            ),
+        )
+
+    async def list_pending_approvals_for_org(self, org_id: UUID) -> list[asyncpg.Record]:
+        return cast(
+            list[asyncpg.Record],
+            await self.pool.fetch(
+                """
+                SELECT DISTINCT ar.*
+                FROM approval_requests ar
+                JOIN events e ON e.span_id = ar.span_id AND e.event_type = 'CallAttempted'
+                JOIN agents a ON a.id = e.agent_id
+                WHERE a.org_id = $1 AND ar.status = 'pending'
+                ORDER BY ar.requested_at
+                """,
+                org_id,
+            ),
+        )
 
 
 db = Database()

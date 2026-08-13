@@ -7,6 +7,7 @@ from the FastAPI-produced OpenAPI schema rather than duplicating models by
 hand — see docs/ARCHITECTURE.md §7 (Language & schema decisions).
 """
 
+from .approvals import ApprovalRequestResponse, ApprovalStatus
 from .errors import BastionError, ErrorDetail, ErrorResponse
 from .events import (
     CallAttemptedPayload,
@@ -35,6 +36,8 @@ from .realtime import (
 from .spans import CompleteSpanRequest, CompleteSpanResponse
 
 __all__ = [
+    "ApprovalRequestResponse",
+    "ApprovalStatus",
     "BastionError",
     "ErrorDetail",
     "ErrorResponse",
