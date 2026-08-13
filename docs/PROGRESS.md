@@ -1,7 +1,7 @@
 # BASTION — Progress Log
 
-## Status: Phase 5 complete
-Phase: 5 (auth) → next up: Phase 6 (live WebSocket fan-out)
+## Status: Phase 6 complete
+Phase: 6 (live WebSocket fan-out) → next up: Phase 7 (3D live frontend)
 
 ## Log
 - [2026-08-14] Project specced out (PRD, ARCHITECTURE, DATA_MODEL, AUTH, API_SPEC, BUILD_PLAN written). No code yet.
@@ -238,10 +238,43 @@ Phase: 5 (auth) → next up: Phase 6 (live WebSocket fan-out)
     this had been silently wrong since Phase 0 and would have failed CI's first real run. Added the
     missing flag plus a `generate_dev_keys.py` step.
 
+- [2026-08-14] Phase 6 complete:
+  - `WS /live/{agent_id}` (aggregator) pushes deltas straight from the same Postgres LISTEN/NOTIFY
+    handler that already maintained `active_traces` since Phase 4 — no polling anywhere in the path,
+    matching the milestone's own framing exactly.
+  - Auth via `?token=<access token>` query param rather than a header — browsers won't let JS set a
+    custom header on a WebSocket handshake. Verification logic is shared with the HTTP dependency via
+    a new `human_auth.decode_bearer_token` (factored out, not duplicated); connection close uses
+    application-defined codes `4401`/`4403` since a close frame has no JSON body for an error envelope.
+    Documented in `docs/ARCHITECTURE.md` §15.
+  - `ConnectionManager` (`aggregator/src/bastion_aggregator/ws.py`) groups sockets by `agent_id`,
+    matching the endpoint shape exactly — a viewer only ever sees deltas for the one agent they
+    subscribed to.
+  - Delta derivation reuses the Phase 4 fold rather than a parallel implementation: on each
+    notification, look up just the touched `span_id`'s node from a fresh fold and translate directly —
+    `CallAttempted` → `node_added` (+`edge_added` if it has a parent), everything else →
+    `node_updated`. One source of truth for "what does this event mean for the graph."
+  - **Fixed along the way (test infra)**: Starlette's own `TestClient.websocket_connect` runs the ASGI
+    app on a separate thread's event loop, which would hit the exact cross-loop asyncpg issue Phase 1
+    already worked around (session-scoped `db` pool bound to the outer loop). Added `httpx-ws` as a
+    test-only dependency instead — it drives WS through the same `httpx.AsyncClient` + `ASGITransport`
+    pattern every other test uses, staying on one event loop. Documented in `docs/ARCHITECTURE.md` §15.
+  - **Milestone test passes** (`test_two_viewers_see_identical_live_updates_with_no_polling`): two
+    independent WebSocket connections (two simulated browser tabs, two different viewer-role users)
+    subscribed to the same `agent_id`; a single real intercepted call produces `node_added` then two
+    `node_updated` messages, byte-identical on both connections, received via push — no polling loop on
+    either side. Plus auth tests (missing token, cross-org `agent_id`). Full 42-test workspace suite
+    passes, `ruff`/`mypy --strict` clean.
+
 ## Next up
-- Phase 6: `WS /live/{agent_id}` pushing graph deltas from the aggregator's `active_traces` (already
-  built in Phase 4, just not wired to a live transport yet) as events arrive. Milestone: two browser
-  tabs open, agent runs, both see identical live updates with no polling.
+- Phase 7: the 3D live frontend (React + react-three-fiber) — **the first UI code in this project**.
+  Per CLAUDE.md and BUILD_PLAN.md's own explicit ordering, this is deliberately last among the backend
+  phases: Phases 1-6 all have passing milestone tests first. Use the `frontend-design` skill before
+  writing any component. Force-directed layout, delta-based scene updates (never a full re-render per
+  event — ARCHITECTURE.md §2.6), color/size encoding, 2D inspector panel on node click. Milestone: run
+  the demo agent with a simulated prompt injection live, watch the blocked call turn red in real time.
+  (Phase 8's reference demo agent — the thing that actually *produces* that live traffic — doesn't
+  exist yet either; Phase 7's milestone will need at least a minimal version of it to demo against.)
 
 ## Known deviations from BUILD_PLAN.md
 - None in phase *order*. Implementation-level deviations from the original spec docs, all flagged in
@@ -251,7 +284,8 @@ Phase: 5 (auth) → next up: Phase 6 (live WebSocket fan-out)
   endpoints took an explicit `org_id` param before auth existed, now removed (Phase 2 §11 → Phase 5),
   (5) `/intercept` never blocks for approval, `GET /approvals/{id}` is the real long-poll target
   (Phase 3, §13), (6) `PolicyEvaluated` event type never emitted, folded into the decision events
-  instead (Phase 4, §14).
+  instead (Phase 4, §14), (7) WS auth via query param instead of a header, browser API constraint
+  (Phase 6, §15).
 
 ## Open questions / decisions needed
 - None currently blocking. One thing to revisit later: `POST /agents` and a signup/registration

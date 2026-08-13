@@ -187,7 +187,16 @@ filters aren't implemented yet.
 ## Realtime API
 
 ### `WS /live/{agent_id}`
-Frontend subscribes here for live graph deltas while an agent is actively running.
+Served by the aggregator. Frontend subscribes here for live graph deltas while an agent is
+actively running — pushed straight from the same Postgres LISTEN/NOTIFY handler that
+updates `active_traces` (ARCHITECTURE.md §14), no polling on either side.
+
+Auth via **`?token=<access token>`** query param, not an `Authorization` header — a browser's
+WebSocket API doesn't let JS set custom headers on the handshake. Connection is closed with
+code `4401` (missing/invalid token) or `4403` (`agent_id` belongs to a different org than the
+token's) — the 4xxx range is reserved for application-defined WebSocket close codes, mirroring
+the HTTP endpoints' 401/403.
+
 ```json
 // Server → client messages
 { "type": "node_added", "node": { "span_id": "...", "tool_name": "...", "status": "pending" } }

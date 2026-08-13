@@ -31,6 +31,16 @@ class AuthenticatedUser:
     role: UserRole
 
 
+def decode_bearer_token(token: str) -> AuthenticatedUser:
+    """Shared by the HTTP dependency below and WS /live/{agent_id} (main.py)
+    — a WebSocket handshake can't carry a custom Authorization header from
+    browser JS, so that endpoint takes the token as a query param instead
+    and calls this directly rather than going through the Header-based
+    FastAPI dependency."""
+    claims: AccessTokenClaims = decode_access_token(token, _public_key_pem())
+    return AuthenticatedUser(id=claims.user_id, org_id=claims.org_id, role=claims.role)
+
+
 async def authenticate_user(
     request: Request, authorization: str | None = Header(default=None)
 ) -> AuthenticatedUser:
@@ -47,7 +57,7 @@ async def authenticate_user(
         )
     token = authorization.removeprefix("Bearer ").strip()
     try:
-        claims: AccessTokenClaims = decode_access_token(token, _public_key_pem())
+        return decode_bearer_token(token)
     except InvalidAccessToken as exc:
         raise HTTPException(
             status_code=401,
@@ -59,4 +69,3 @@ async def authenticate_user(
                 }
             },
         ) from exc
-    return AuthenticatedUser(id=claims.user_id, org_id=claims.org_id, role=claims.role)

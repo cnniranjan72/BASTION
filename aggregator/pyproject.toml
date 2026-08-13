@@ -24,6 +24,12 @@ dev = [
   "httpx>=0.27",
   "bastion-interceptor",
   "bastion-sdk",
+  # WS testing on the *same* event loop as the rest of the async test suite
+  # (Starlette's own sync TestClient.websocket_connect runs the ASGI app on
+  # a separate thread/loop, which would hit the same cross-loop asyncpg
+  # issue documented in root pyproject.toml's asyncio_default_fixture_loop_scope
+  # comment — the session-scoped db pool is bound to the outer loop).
+  "httpx-ws>=0.6",
 ]
 
 [tool.uv.sources]
