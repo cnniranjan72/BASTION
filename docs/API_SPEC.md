@@ -145,9 +145,32 @@ Phase 3 explicitly calls this out as the acceptable interim UI) is served at
 `GET /approvals-ui`.
 
 ### Traces
-- `GET /traces?agent_id=&status=&from=&to=` — list/search
-- `GET /traces/{trace_id}` — full replay data (folded event stream + graph)
-- `GET /traces/{trace_id}/events` — raw event list (for the inspector panel)
+**Served by the aggregator, not the interceptor** (`aggregator/src/bastion_aggregator/main.py`)
+— it owns the read-model these come from. `agent_id`/`status`/`from`/`to` filters aren't
+implemented yet, only `org_id` (same explicit-param pattern as Policies/Approvals above).
+
+- `GET /traces?org_id=uuid` — persisted (terminal-state) traces only, newest first. An
+  in-progress trace has no `trace_summaries` row by design (see `GET /traces/{id}` below) —
+  it won't appear here until it finishes.
+- `GET /traces/{trace_id}` — full replay: `trace_summaries.graph_snapshot` if a persisted
+  projection exists (fast path), else folds `events` fresh — this is what makes an
+  **in-progress** trace replayable too, not just completed ones (event-sourcing discipline:
+  current state is always derivable from `events`, docs/ARCHITECTURE.md §14).
+  ```json
+  {
+    "trace_id": "uuid", "agent_id": "uuid",
+    "status": "running",              // | "completed" | "failed" | "had_blocks"
+    "total_cost": 0.002, "total_calls": 3, "blocked_calls": 0,
+    "started_at": "2026-01-01T00:00:00Z", "ended_at": null,
+    "nodes": [
+      { "span_id": "uuid", "parent_span_id": null, "tool_name": "tool.root",
+        "status": "completed", "args": {}, "latency_ms": 42.1, "cost": null, "reason": null }
+    ],
+    "edges": [ { "from": "uuid", "to": "uuid" } ]
+  }
+  ```
+- `GET /traces/{trace_id}/events` — raw event list, ordered by `sequence_number` (for the
+  2D inspector panel, ARCHITECTURE.md §2.6).
 
 ## Realtime API
 

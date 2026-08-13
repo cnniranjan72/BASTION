@@ -1,7 +1,7 @@
 # BASTION — Progress Log
 
-## Status: Phase 3 complete
-Phase: 3 (approval flow) → next up: Phase 4 (trace aggregator + replay API)
+## Status: Phase 4 complete
+Phase: 4 (trace aggregator + replay API) → next up: Phase 5 (auth)
 
 ## Log
 - [2026-08-14] Project specced out (PRD, ARCHITECTURE, DATA_MODEL, AUTH, API_SPEC, BUILD_PLAN written). No code yet.
@@ -168,11 +168,44 @@ Phase: 3 (approval flow) → next up: Phase 4 (trace aggregator + replay API)
     (test-shortened, via `object.__setattr__` on the frozen `Config` singleton) TTL is discovered as
     `timed_out` and denies. Full 24-test workspace suite passes, `ruff`/`mypy --strict` clean.
 
+- [2026-08-14] Phase 4 complete:
+  - **Subscription mechanism**: Postgres LISTEN/NOTIFY (ARCHITECTURE.md §2.5 offered this or "a
+    lightweight queue") via a trigger-driven `NOTIFY` on every `events` insert (migration
+    `0004_trace_summaries.sql`) — no extra infrastructure, and can't be forgotten by a future writer
+    the way "remember to also publish to Redis" could. Minimal payload (`trace_id`/`span_id`/
+    `event_type`, well under the 8000-byte `NOTIFY` limit); the aggregator re-fetches full rows itself.
+  - **Trace completion detection**: no explicit "done" event exists in DATA_MODEL.md's vocabulary. The
+    fold watches the *root* span (parent_span_id null) for a terminal event — reliable because the
+    SDK's `call()` only reports the root's own completion after its `execute()` returns, which for the
+    root means every nested call it awaited already completed (docs/ARCHITECTURE.md §8). Documented in
+    `docs/ARCHITECTURE.md` §14.
+  - `aggregator/src/bastion_aggregator/graph.py`: `fold_events_to_graph`, one pure function used both
+    by the live LISTEN/NOTIFY handler and by `GET /traces/{id}`'s on-demand fallback — same fold, same
+    code path, matching CLAUDE.md rule #1 (current state is always a fold over events, never stored
+    directly as the source of truth).
+  - `trace_summaries` (DATA_MODEL.md, unmodified) persisted only once a trace reaches a terminal state
+    — an active trace has no row there by design; `GET /traces` only lists finished traces, while
+    `GET /traces/{id}` for an in-progress one falls back to folding `events` fresh, proven by a
+    dedicated test (`test_replay_before_completion_folds_live`).
+  - **Noted, not a bug**: `PolicyEvaluated` (in DATA_MODEL.md's event vocabulary) is never emitted as
+    its own event — `CallAllowed`/`CallBlocked`/`CallPendingApproval` already carry the policy decision
+    and reasoning in their payload; a separate event would just double the count per call with no new
+    information. Documented in `docs/ARCHITECTURE.md` §14.
+  - **Milestone test passes** (`aggregator/tests/test_replay.py`, 4 tests) — genuinely cross-service:
+    real trace data generated through the *interceptor's* app, replayed through the *aggregator's*,
+    both against the same Postgres, exactly as two separately deployed services would interact.
+    Verifies causal graph reconstruction (nodes/edges/status/cost), raw event listing, org-scoped
+    listing, and live-fold-before-persistence. Added `bastion-interceptor`/`bastion-sdk` as aggregator
+    *dev*-only dependencies (via `{ workspace = true }`) to make this cross-package test import
+    explicit rather than relying on `uv sync --all-packages` installing everything incidentally.
+    Full 28-test workspace suite passes, `ruff`/`mypy --strict` clean.
+
 ## Next up
-- Phase 4: trace aggregator service — subscribe to the event stream, build in-memory graphs per active
-  trace, persist `trace_summaries` (read-model/projection, rebuildable from `events`) on completion.
-  `GET /traces/{id}` full replay endpoint (folded event stream + graph). Milestone: pull up any past
-  trace via API and get a complete, correctly-ordered causal graph as JSON.
+- Phase 5: proper auth per AUTH.md — argon2id, JWT access tokens (asymmetric signing), refresh token
+  rotation with family-based reuse detection, RBAC middleware. Retrofit onto every dashboard/trace/
+  policy/approval endpoint (all currently open, explicit-`org_id` stopgaps — see "Open questions"
+  below). `POST /agents` finally gets built here too. Milestone: simulate refresh token theft (reuse an
+  already-rotated token) and assert the whole family gets revoked.
 
 ## Known deviations from BUILD_PLAN.md
 - None in phase *order*. Implementation-level deviations from the original spec docs, all flagged in
@@ -180,12 +213,13 @@ Phase: 3 (approval flow) → next up: Phase 4 (trace aggregator + replay API)
   §7), (2) interceptor doesn't proxy the real downstream call, the SDK does (Phase 1, §8), (3)
   `policy_sets` added for stable identity across policy versions (Phase 2, §10), (4) policy dashboard
   endpoints take an explicit `org_id` param until Phase 5 auth lands (Phase 2, §11), (5) `/intercept`
-  never blocks for approval, `GET /approvals/{id}` is the real long-poll target (Phase 3, §13).
+  never blocks for approval, `GET /approvals/{id}` is the real long-poll target (Phase 3, §13), (6)
+  `PolicyEvaluated` event type never emitted, folded into the decision events instead (Phase 4, §14).
 
 ## Open questions / decisions needed
-- None currently blocking. Three things to revisit in Phase 5: (1) `POST /agents` (dashboard API, needs
-  RBAC) doesn't exist yet — tests insert agents directly via SQL as a stand-in; confirm this gets built
-  in Phase 5 alongside the rest of the dashboard API. (2) Swap `/policies`' and `/approvals`' explicit
-  `org_id` param/field for one derived from the authenticated JWT session (§11) — the isolation logic
-  itself shouldn't need to change, only where `org_id` comes from. (3) Populate `approval_requests.
-  resolved_by` once real user sessions exist; add the deferred FK to `users(id)`.
+- None currently blocking. Three things to land in Phase 5: (1) `POST /agents` (dashboard API, needs
+  RBAC) doesn't exist yet — tests insert agents directly via SQL as a stand-in. (2) Swap `/policies`',
+  `/approvals`', and `/traces`' explicit `org_id` param/field for one derived from the authenticated
+  JWT session — the isolation logic itself shouldn't need to change, only where `org_id` comes from.
+  (3) Populate `approval_requests.resolved_by` once real user sessions exist; add the deferred FK to
+  `users(id)`.

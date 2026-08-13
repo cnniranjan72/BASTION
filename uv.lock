@@ -187,6 +187,8 @@ dependencies = [
 
 [package.optional-dependencies]
 dev = [
+    { name = "bastion-interceptor" },
+    { name = "bastion-sdk" },
     { name = "httpx" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
@@ -195,6 +197,8 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "asyncpg", specifier = ">=0.30" },
+    { name = "bastion-interceptor", marker = "extra == 'dev'", editable = "interceptor" },
+    { name = "bastion-sdk", marker = "extra == 'dev'", editable = "sdk-python" },
     { name = "bastion-shared", editable = "shared" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.27" },

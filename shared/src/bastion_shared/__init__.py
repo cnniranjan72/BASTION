@@ -17,6 +17,7 @@ from .events import (
     NewEvent,
     PolicyDecisionPayload,
 )
+from .graph import GraphEdge, GraphNode, NodeStatus, TraceGraph, TraceStatus, TraceSummaryResponse
 from .intercept import (
     InterceptAllowedResponse,
     InterceptBlockedResponse,
@@ -47,6 +48,12 @@ __all__ = [
     "EventType",
     "NewEvent",
     "PolicyDecisionPayload",
+    "GraphEdge",
+    "GraphNode",
+    "NodeStatus",
+    "TraceGraph",
+    "TraceStatus",
+    "TraceSummaryResponse",
     "InterceptAllowedResponse",
     "InterceptBlockedResponse",
     "InterceptPendingResponse",
