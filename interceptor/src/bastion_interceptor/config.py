@@ -11,6 +11,12 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 class Config:
     port: int
     database_url: str
+    # U8 (v2 upgrade): a second, deliberately non-superuser connection —
+    # `database_url` above connects as `bastion`, the Postgres bootstrap
+    # superuser, which unconditionally bypasses Row-Level Security no
+    # matter what policies exist (docs/adr/ADR-009). Only
+    # `org_scoped_connection` (db.py) ever uses this.
+    app_database_url: str
     redis_url: str
     env: str
     # Phase 3 approval flow. Absolute deadline for a pending approval before
@@ -45,6 +51,9 @@ def load_config() -> Config:
         port=int(os.environ.get("INTERCEPTOR_PORT", "4001")),
         database_url=os.environ.get(
             "DATABASE_URL", "postgresql://bastion:bastion@localhost:5442/bastion"
+        ),
+        app_database_url=os.environ.get(
+            "APP_DATABASE_URL", "postgresql://bastion_app:bastion_app@localhost:5442/bastion"
         ),
         redis_url=os.environ.get("REDIS_URL", "redis://localhost:6389"),
         env=os.environ.get("NODE_ENV", "development"),

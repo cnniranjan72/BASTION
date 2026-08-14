@@ -10,7 +10,7 @@ Each of these must exist as its own file under `docs/adr/` before Phase 9 (v2) i
 - [ ] ADR-006: Redis as policy cache (ephemeral, not authoritative)
 - [x] ADR-007: Policy distribution — eventual consistency + reconciliation loop
 - [ ] ADR-008: WebSocket fan-out architecture (Redis pub/sub across gateway instances)
-- [ ] ADR-009: Multi-tenant isolation via Postgres RLS + app-layer scoping
+- [x] ADR-009: Multi-tenant isolation via Postgres RLS + app-layer scoping
 - [ ] ADR-010: Event table partitioning strategy and retention window
 - [ ] ADR-011: Object storage for large payloads, threshold and content-addressing
 - [ ] ADR-012: Read replica introduction criteria (benchmark-triggered, not speculative)

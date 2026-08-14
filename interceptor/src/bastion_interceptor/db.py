@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Any, cast
 from uuid import UUID
 
@@ -32,21 +34,54 @@ class PolicyVersionConflict(Exception):
 class Database:
     def __init__(self) -> None:
         self._pool: asyncpg.Pool | None = None
+        self._app_pool: asyncpg.Pool | None = None
 
     async def connect(self) -> None:
         self._pool = await asyncpg.create_pool(
             config.database_url, min_size=1, max_size=10, init=_init_connection
         )
+        # U8 (v2 upgrade): a separate pool, connected as the non-superuser
+        # `bastion_app` role — see org_scoped_connection below and ADR-009
+        # for why RLS needs this rather than just adding policies to the
+        # pool above.
+        self._app_pool = await asyncpg.create_pool(
+            config.app_database_url, min_size=1, max_size=5, init=_init_connection
+        )
 
     async def close(self) -> None:
         if self._pool is not None:
             await self._pool.close()
+        if self._app_pool is not None:
+            await self._app_pool.close()
 
     @property
     def pool(self) -> asyncpg.Pool:
         if self._pool is None:
             raise RuntimeError("Database.connect() was not called")
         return self._pool
+
+    @asynccontextmanager
+    async def org_scoped_connection(self, org_id: UUID) -> AsyncIterator[asyncpg.Connection]:
+        """U8 (v2 upgrade), ADR-009: acquires a connection from the
+        restricted `bastion_app` pool and sets Postgres Row-Level
+        Security's session context (`app.current_org_id`) for the duration
+        of one transaction. Every RLS-enabled table (organizations, agents,
+        policy_sets, policies, trace_summaries, users, api_tokens,
+        idempotency_keys — see migration 0010) is filtered to exactly this
+        org_id by Postgres itself, enforced even if the caller's own query
+        has no `WHERE org_id = ...` clause at all — real defense-in-depth
+        against the application-layer scoping CLAUDE.md rule #7 already
+        requires, not a replacement for it.
+
+        Scope, stated explicitly rather than silently assumed complete: not
+        every call site in this file has been retrofitted to use this —
+        the ones that have are noted at their definitions. The rest
+        continue to rely solely on application-layer `WHERE org_id`
+        scoping, exactly as before this phase."""
+        assert self._app_pool is not None, "Database.connect() was not called"
+        async with self._app_pool.acquire() as conn, conn.transaction():
+            await conn.execute("SELECT set_config('app.current_org_id', $1, true)", str(org_id))
+            yield conn
 
     async def get_agent_by_api_key_hash(self, api_key_hash: str) -> asyncpg.Record | None:
         return cast(
@@ -76,14 +111,20 @@ class Database:
         return record
 
     async def list_agents(self, org_id: UUID) -> list[asyncpg.Record]:
-        return cast(
-            list[asyncpg.Record],
-            await self.pool.fetch(
-                "SELECT id, org_id, name, default_policy_set_id, created_at FROM agents "
-                "WHERE org_id = $1 ORDER BY created_at DESC",
-                org_id,
-            ),
-        )
+        """U8 (v2 upgrade): scoped via org_scoped_connection/RLS (migration
+        0010) instead of an application-layer `WHERE org_id` filter —
+        deliberately, as the concrete demonstration this phase's milestone
+        test wants: Postgres itself guarantees this can never return
+        another org's agents, even if this query were accidentally
+        rewritten without any org-scoping clause at all."""
+        async with self.org_scoped_connection(org_id) as conn:
+            return cast(
+                list[asyncpg.Record],
+                await conn.fetch(
+                    "SELECT id, org_id, name, default_policy_set_id, created_at FROM agents "
+                    "ORDER BY created_at DESC"
+                ),
+            )
 
     async def update_agent_policy_set(
         self, agent_id: UUID, org_id: UUID, policy_set_id: UUID | None

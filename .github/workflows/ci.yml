@@ -58,6 +58,11 @@ jobs:
           --health-retries 15
     env:
       DATABASE_URL: postgresql://bastion:bastion@localhost:5432/bastion
+      # U8 (v2 upgrade): the restricted, non-superuser role Row-Level
+      # Security tests connect as — see migration 0010 and ADR-009. Created
+      # by the migration itself (run under DATABASE_URL's superuser), not
+      # provisioned here — this is just the connection string for it.
+      APP_DATABASE_URL: postgresql://bastion_app:bastion_app@localhost:5432/bastion
       REDIS_URL: redis://localhost:6379
       KAFKA_BOOTSTRAP_SERVERS: localhost:9092
     steps:

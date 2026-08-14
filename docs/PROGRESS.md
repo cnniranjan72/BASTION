@@ -781,7 +781,7 @@ Target architecture: `UPGRADE_ARCHITECTURE.md`. Target frontend: `FRONTEND_V2.md
 file before starting (migrations 0001–0006 present, 67 tests passing, live on Render, aggregator
 confirmed still on Postgres LISTEN/NOTIFY per v1 design) — no mismatch found.
 
-**Current phase**: U1–U7 complete, U8 next.
+**Current phase**: U1–U8 complete, U9 next.
 
 ### Phase status
 - **U1 — Explicit state machine: done.** `shared/src/bastion_shared/call_state.py` — `CallState` enum
@@ -981,7 +981,31 @@ confirmed still on Postgres LISTEN/NOTIFY per v1 design) — no mismatch found.
   shape to a tool-call block's; a $150 approval under the cap allowed end-to-end; and (not from the
   milestone wording, but necessary for the backward-compatibility claim) an org with no authorization
   policy configured at all behaves exactly as before U7 — all 3 passed on first run.
-- U8–U16: not started.
+- **U8 — Tenant isolation at the database layer: done.** Migration `0010_row_level_security.sql`
+  enables `ENABLE`/`FORCE ROW LEVEL SECURITY` + a `USING (org_id = current_setting('app.current_org_id',
+  true)::uuid)` policy on every table carrying `org_id` directly (`organizations`, `agents`,
+  `policy_sets`, `policies`, `trace_summaries`, `users`, `api_tokens`, `idempotency_keys`) — `events`,
+  `outbox_events`, `approval_requests`, `refresh_tokens` deliberately NOT covered (no direct `org_id`
+  column; a subquery-based policy or denormalized column is a real, larger follow-up, stated
+  explicitly rather than silently assumed done). **Real, consequential finding** (ADR-009): the
+  existing `bastion` connection role is the Postgres bootstrap superuser, which unconditionally
+  bypasses RLS — confirmed empirically before committing to the design, not just from docs — so a
+  genuinely new, non-superuser role (`bastion_app`) was required; `interceptor/db.py` gained a
+  second pool and an `org_scoped_connection(org_id)` helper, and `list_agents` was retrofitted to
+  use it with its application-layer `WHERE org_id` filter *removed entirely* — the concrete,
+  load-bearing proof, not just a standalone mechanism. **Second real bug**, found writing the
+  milestone test itself, fixed in follow-up migration `0011_rls_empty_string_guc_fix.sql`:
+  `app.current_org_id` is a Postgres "placeholder" GUC whose reset value after a `SET LOCAL`
+  transaction ends is an empty string, not `NULL` — on a *reused pooled connection* (exactly what
+  RLS needs to protect against), the next query without a fresh `set_config` call would hit
+  `''::uuid` and hard-error instead of failing closed to zero rows. `NULLIF(..., '')` fixes it.
+  Milestone test (`interceptor/tests/test_row_level_security.py`, 12 cases): a cross-org read with
+  no `WHERE org_id` clause at all sees only its own org's rows; a connection with no org context set
+  sees nothing (not an error, not everything); the superuser connection is confirmed still
+  unaffected by RLS (documenting exactly why the second role was needed); `list_agents`'s real
+  retrofit proven end-to-end; every RLS-enabled table's `pg_class` flags checked directly as a
+  regression guard. All 12 passed after the one real fix. ADR-009 written.
+- U9–U16: not started.
 
 ### ADR checklist (mirrors `ADR_INDEX.md`)
 - [x] ADR-001: PostgreSQL as source of truth — `docs/adr/ADR-001-...md`.
