@@ -10,6 +10,7 @@ resolution-markers = [
 [manifest]
 members = [
     "bastion-aggregator",
+    "bastion-demo-agent",
     "bastion-interceptor",
     "bastion-sdk",
     "bastion-shared",
@@ -253,6 +254,34 @@ requires-dist = [
     { name = "redis", specifier = ">=5.2" },
     { name = "structlog", specifier = ">=24.4" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.32" },
+]
+provides-extras = ["dev"]
+
+[[package]]
+name = "bastion-demo-agent"
+version = "0.0.0"
+source = { editable = "demo-agent" }
+dependencies = [
+    { name = "asyncpg" },
+    { name = "bastion-sdk" },
+    { name = "redis" },
+]
+
+[package.optional-dependencies]
+dev = [
+    { name = "bastion-interceptor" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "asyncpg", specifier = ">=0.29" },
+    { name = "bastion-interceptor", marker = "extra == 'dev'", editable = "interceptor" },
+    { name = "bastion-sdk", editable = "sdk-python" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.3" },
+    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.24" },
+    { name = "redis", specifier = ">=5.0" },
 ]
 provides-extras = ["dev"]
 

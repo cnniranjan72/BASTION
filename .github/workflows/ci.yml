@@ -49,8 +49,8 @@ jobs:
       - run: uv run python infra/keys/generate_dev_keys.py
       - run: uv run ruff check .
       - run: uv run ruff format --check .
-      - run: uv run mypy shared/src interceptor/src aggregator/src sdk-python/bastion
-      - run: uv run pytest shared/tests interceptor/tests aggregator/tests sdk-python/tests
+      - run: uv run mypy shared/src interceptor/src aggregator/src sdk-python/bastion demo-agent/demo_agent
+      - run: uv run pytest shared/tests interceptor/tests aggregator/tests sdk-python/tests demo-agent/tests
 
   frontend:
     name: Frontend (placeholder — Phase 7)

@@ -1,0 +1,26 @@
+[project]
+name = "bastion-demo-agent"
+version = "0.0.0"
+description = "Reference demo agent + prompt-injection scenario (BUILD_PLAN.md Phase 8)."
+requires-python = ">=3.11"
+dependencies = ["bastion-sdk", "asyncpg>=0.29", "redis>=5.0"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.3", "pytest-asyncio>=0.24", "bastion-interceptor"]
+
+[tool.uv.sources]
+bastion-sdk = { workspace = true }
+bastion-interceptor = { workspace = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["demo_agent"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"

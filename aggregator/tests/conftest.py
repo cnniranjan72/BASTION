@@ -111,6 +111,25 @@ async def test_agent(test_org: uuid.UUID) -> tuple[uuid.UUID, str]:
     return agent_id, raw_key
 
 
+@pytest.fixture
+def assign_policy_set_to_agent():
+    """Same stand-in reasoning as the fixture of the same name in
+    interceptor/tests/conftest.py — no agent-management endpoint yet."""
+
+    async def _assign(agent_id: uuid.UUID, policy_set_id: uuid.UUID) -> None:
+        conn = await asyncpg.connect(DATABASE_URL)
+        try:
+            await conn.execute(
+                "UPDATE agents SET default_policy_set_id = $1 WHERE id = $2",
+                policy_set_id,
+                agent_id,
+            )
+        finally:
+            await conn.close()
+
+    return _assign
+
+
 DEFAULT_TEST_PASSWORD = "correct horse battery staple"
 
 

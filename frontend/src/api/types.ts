@@ -115,6 +115,7 @@ export type LiveMessage =
       status: Exclude<NodeStatus, "pending">;
       latency_ms?: number;
       cost?: number;
+      reason?: string | null;
     }
   | { type: "edge_added"; from: string; to: string };
 

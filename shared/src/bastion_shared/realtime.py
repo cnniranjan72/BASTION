@@ -25,6 +25,7 @@ class NodeUpdatedMessage(BaseModel):
     status: Literal["allowed", "blocked", "pending_approval", "completed", "failed"]
     latency_ms: float | None = None
     cost: float | None = None
+    reason: str | None = None  # block/deny/failure reason, when applicable (mirrors GraphNode)
 
 
 class EdgeAddedMessage(BaseModel):

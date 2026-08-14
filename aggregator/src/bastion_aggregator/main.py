@@ -111,6 +111,7 @@ async def _handle_notification(data: dict[str, str]) -> None:
                     status=node.status,
                     latency_ms=node.latency_ms,
                     cost=node.cost,
+                    reason=node.reason,
                 ),
             )
 

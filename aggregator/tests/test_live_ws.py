@@ -12,6 +12,7 @@ loop).
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from collections.abc import Awaitable, Callable
 from uuid import UUID
 
@@ -71,6 +72,67 @@ async def test_two_viewers_see_identical_live_updates_with_no_polling(
     assert messages_a[1]["status"] == "allowed"
     assert messages_a[2]["status"] == "completed"
     assert messages_a[2]["latency_ms"] is not None
+
+
+async def test_blocked_call_delta_includes_the_block_reason(
+    test_agent: tuple[UUID, str],
+    make_user: Callable[..., Awaitable[dict]],
+    login_as: Callable[[dict], Awaitable[dict]],
+    assign_policy_set_to_agent: Callable[[UUID, UUID], Awaitable[None]],
+) -> None:
+    """Regression test: node_updated used to carry status/latency_ms/cost
+    but silently drop `reason`, even though fold_events_to_graph computes it
+    and the replay path (GraphNode.reason) already returns it — the live
+    view just never received it. Found manually while verifying Phase 8's
+    prompt-injection demo in a real browser."""
+    agent_id, raw_key = test_agent
+    admin_login = await login_as(await make_user(role="admin"))
+    viewer_login = await login_as(await make_user(role="viewer"))
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=interceptor_app), base_url="http://interceptor.test"
+    ) as http:
+        create = await http.post(
+            "/policies",
+            json={
+                "name": "live-ws-block-test",
+                "definition": [
+                    {"match": {"tool": "danger.tool"}, "action": "block"},
+                    {"match": {"tool": "*"}, "action": "allow"},
+                ],
+            },
+            headers={"Authorization": f"Bearer {admin_login['access_token']}"},
+        )
+        create.raise_for_status()
+        policy = create.json()
+        activate = await http.post(
+            f"/policies/{policy['id']}/activate",
+            headers={"Authorization": f"Bearer {admin_login['access_token']}"},
+        )
+        activate.raise_for_status()
+
+    await assign_policy_set_to_agent(agent_id, UUID(policy["policy_set_id"]))
+
+    transport = ASGIWebSocketTransport(app=aggregator_app)
+    async with (
+        httpx.AsyncClient(transport=transport, base_url="http://aggregator.test") as client_ws,
+        aconnect_ws(f"/live/{agent_id}?token={viewer_login['access_token']}", client_ws) as ws,
+    ):
+        await asyncio.sleep(0.1)
+
+        async with _bastion_client(agent_id, raw_key) as client:
+            # BastionBlockedError expected here — execute() never runs.
+            with contextlib.suppress(Exception):
+                await client.call("danger.tool", {}, _noop)
+
+        added = await ws.receive_json()
+        updated = await ws.receive_json()
+
+    assert added["type"] == "node_added"
+    assert updated["type"] == "node_updated"
+    assert updated["status"] == "blocked"
+    assert updated["reason"] is not None
+    assert "danger.tool" in updated["reason"]
 
 
 async def test_missing_token_closes_connection(test_agent: tuple[UUID, str]) -> None:

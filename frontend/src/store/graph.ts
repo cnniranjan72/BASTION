@@ -58,6 +58,7 @@ export const useGraphStore = create<GraphState>((set, get) => ({
           status: message.status as NodeStatus,
           latency_ms: message.latency_ms ?? existing.latency_ms,
           cost: message.cost ?? existing.cost,
+          reason: message.reason ?? existing.reason,
         });
         set({ nodes });
         break;
