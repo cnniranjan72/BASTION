@@ -1,7 +1,7 @@
 # BASTION — Progress Log
 
-## Status: Phase 6 complete
-Phase: 6 (live WebSocket fan-out) → next up: Phase 7 (3D live frontend)
+## Status: Phase 7 complete
+Phase: 7 (3D live frontend) → next up: Phase 8 (reference demo agent + prompt-injection scenario)
 
 ## Log
 - [2026-08-14] Project specced out (PRD, ARCHITECTURE, DATA_MODEL, AUTH, API_SPEC, BUILD_PLAN written). No code yet.
@@ -266,15 +266,59 @@ Phase: 6 (live WebSocket fan-out) → next up: Phase 7 (3D live frontend)
     either side. Plus auth tests (missing token, cross-org `agent_id`). Full 42-test workspace suite
     passes, `ruff`/`mypy --strict` clean.
 
+- [2026-08-14] Phase 7 complete:
+  - **No `frontend-design` skill available** in this environment (confirmed, not a lookup miss), and no
+    tool exists that can install a Claude Code skill/plugin — that's a human-run CLI action, flagged to
+    the user, who confirmed proceeding with manual design judgment instead. Documented in
+    `docs/ARCHITECTURE.md` §16.
+  - Vite + React 19 + TypeScript 5.9.3 (**not** 7.x — conflicts with `typescript-eslint`'s peer range)
+    + react-router-dom 7 + zustand 5 + `@react-three/fiber` 9 / `@react-three/drei` 10 / `three` 0.185 +
+    `d3-force-3d` (no official types, hand-written ambient `.d.ts` — `@types/d3-force-3d` doesn't exist
+    on npm, confirmed 404).
+  - Login page (JWT access/refresh via the Phase 5 auth API, zustand-persisted to localStorage) →
+    dashboard: sidebar (connect-to-live-agent form + recent completed traces), center 3D force-directed
+    graph (live WS delta-driven or historical-replay-snapshot-driven, same `GraphCanvas`/`ForceGraph`
+    components either way), right-side 2D inspector panel (full span detail on node click — the actual
+    debugging substance per ARCHITECTURE.md §2.6, not just the 3D view).
+  - `frontend/src/api/types.ts` is a **hand-written** mirror of `bastion_shared`, not OpenAPI-generated —
+    a real gap (will drift silently), not a deliberate design choice; flagged for Phase 11 in
+    `docs/ARCHITECTURE.md` §16 rather than left implicit.
+  - **Two rendering bugs found during first real end-to-end browser verification** (real backend, real
+    Postgres, real WebSocket, real browser — not a mock), both invisible against an idle/empty graph and
+    only surfacing once actual trace data flowed in:
+    1. **Infinite render loop / WebGL context loss**: a zustand selector (`Array.from(store.nodes.keys())`)
+       allocated a new array every call, which breaks `useSyncExternalStore`'s stability contract and
+       loops until React's own depth limit throws. Fixed with `useShallow`; audited every other selector
+       in the codebase for the same pattern (none found). Full root cause and fix in
+       `docs/ARCHITECTURE.md` §16.
+    2. **Force-simulation blowup on multi-node load**: replaying a completed trace loads its whole node
+       set in one effect run (unlike a live trace, which adds nodes one at a time), and the default
+       unbounded inverse-square charge force flung near-coincident nodes off-camera on the first tick.
+       Fixed via `distanceMin`/`distanceMax` on the charge force plus retuned charge/center strengths.
+       Also fixed, unrelated: `.graph-area` (a CSS grid `1fr` track) had no `min-width: 0`, so the
+       `<Canvas>`'s intrinsic sizing could blow out the grid track before `ResizeObserver` settled,
+       producing a page-level horizontal scrollbar. Both in `docs/ARCHITECTURE.md` §16.
+  - **Milestone verified manually in-browser** (no automated test suite for the frontend yet — noted as
+    a gap, not silently skipped): logged in as the seeded `owner` user, connected to the live agent,
+    ran a real nested multi-span trace through the actual Python SDK against the actual interceptor —
+    graph updated live over the WebSocket with no crash (confirming both bug fixes above), clicked a
+    node and confirmed the inspector showed correct status/span_id/latency, opened historical replay for
+    a completed trace and confirmed the full graph loads and settles. `npm run typecheck` (`tsc -b`) and
+    `npm run lint` (`eslint .`) both clean.
+  - BUILD_PLAN.md's actual Phase 7 milestone ("simulated prompt injection live, watch the blocked call
+    turn red") needs Phase 8's reference demo agent to generate that scenario — not built yet, tracked
+    below as before, not silently dropped.
+
 ## Next up
-- Phase 7: the 3D live frontend (React + react-three-fiber) — **the first UI code in this project**.
-  Per CLAUDE.md and BUILD_PLAN.md's own explicit ordering, this is deliberately last among the backend
-  phases: Phases 1-6 all have passing milestone tests first. Use the `frontend-design` skill before
-  writing any component. Force-directed layout, delta-based scene updates (never a full re-render per
-  event — ARCHITECTURE.md §2.6), color/size encoding, 2D inspector panel on node click. Milestone: run
-  the demo agent with a simulated prompt injection live, watch the blocked call turn red in real time.
-  (Phase 8's reference demo agent — the thing that actually *produces* that live traffic — doesn't
-  exist yet either; Phase 7's milestone will need at least a minimal version of it to demo against.)
+- Phase 8: reference demo agent + prompt-injection scenario. This is also what's needed to properly
+  demo BUILD_PLAN.md's Phase 7 milestone (a blocked call turning red live in the graph) — Phase 7 itself
+  was verified manually with a benign multi-span trace instead, since the scenario generator didn't
+  exist yet.
+- Phase 9: production polish (load testing with real latency numbers, structured logging/metrics,
+  Dockerfiles, K8s manifests).
+- Final documentation set: README.md (with real load-test numbers), generated API docs (flagging
+  API_SPEC.md drift — including the frontend `types.ts` hand-written-mirror gap from Phase 7), SETUP.md,
+  CONTRIBUTING.md if relevant, docs/decisions.md.
 
 ## Known deviations from BUILD_PLAN.md
 - None in phase *order*. Implementation-level deviations from the original spec docs, all flagged in
@@ -285,10 +329,18 @@ Phase: 6 (live WebSocket fan-out) → next up: Phase 7 (3D live frontend)
   (5) `/intercept` never blocks for approval, `GET /approvals/{id}` is the real long-poll target
   (Phase 3, §13), (6) `PolicyEvaluated` event type never emitted, folded into the decision events
   instead (Phase 4, §14), (7) WS auth via query param instead of a header, browser API constraint
-  (Phase 6, §15).
+  (Phase 6, §15), (8) no `frontend-design` skill available, proceeded with manual design judgment
+  (Phase 7, §16), (9) frontend wire types hand-written instead of OpenAPI-generated (Phase 7, §16).
 
 ## Open questions / decisions needed
-- None currently blocking. One thing to revisit later: `POST /agents` and a signup/registration
-  endpoint still don't exist — neither AUTH.md nor API_SPEC.md specs one, so agents and users are both
-  inserted directly via SQL in dev/tests. Worth building real endpoints for both before any actual demo
-  that isn't purely API-driven (Phase 8's reference agent will need a real way to register itself).
+- None currently blocking. Things to revisit later:
+  - `POST /agents` and a signup/registration endpoint still don't exist — neither AUTH.md nor
+    API_SPEC.md specs one, so agents and users are both inserted directly via SQL in dev/tests. Worth
+    building real endpoints for both before any actual demo that isn't purely API-driven (Phase 8's
+    reference agent will need a real way to register itself).
+  - Frontend has no automated test suite yet (Phase 7 was verified manually in-browser). Worth adding
+    at least component/store-logic tests before Phase 9 polish, given the two real bugs manual testing
+    already caught that unit tests around the zustand selectors and force-simulation setup likely would
+    have too.
+  - `frontend/src/api/types.ts` (hand-written) vs. FastAPI's generated OpenAPI schema: no drift check
+    exists yet. Flagged for Phase 11.

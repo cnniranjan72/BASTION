@@ -2,8 +2,38 @@
   "name": "@bastion/frontend",
   "version": "0.0.0",
   "private": true,
-  "description": "Placeholder — the React + react-three-fiber live execution graph is built in Phase 7 (BUILD_PLAN.md), on top of a working replay API. Not scaffolded yet by design: Phases 1-6 come first.",
+  "type": "module",
+  "description": "Live 3D execution graph (react-three-fiber) + 2D inspector + historical replay — ARCHITECTURE.md §2.6, built in Phase 7 on top of the working Phases 1-6 backend.",
   "scripts": {
-    "dev": "echo 'frontend not yet scaffolded — see BUILD_PLAN.md Phase 7' && exit 1"
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "lint": "eslint .",
+    "typecheck": "tsc -b --noEmit"
+  },
+  "dependencies": {
+    "@react-three/drei": "^10.7.8",
+    "@react-three/fiber": "^9.7.0",
+    "d3-force-3d": "^3.0.6",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "react-router-dom": "^7.18.2",
+    "three": "^0.185.1",
+    "zustand": "^5.0.15"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.17.0",
+    "@types/react": "^19.2.2",
+    "@types/react-dom": "^19.2.2",
+    "@types/three": "^0.180.0",
+    "@vitejs/plugin-react": "^6.0.5",
+    "eslint": "^9.17.0",
+    "eslint-config-prettier": "^9.1.0",
+    "eslint-plugin-react-hooks": "^5.1.0",
+    "eslint-plugin-react-refresh": "^0.4.16",
+    "prettier": "^3.4.2",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.67.0",
+    "vite": "^8.2.1"
   }
 }
