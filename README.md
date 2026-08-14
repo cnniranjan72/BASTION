@@ -5,9 +5,12 @@ attempts — an HTTP request, a database mutation, a payment — is intercepted,
 allowed/blocked/escalated, and recorded as an immutable event, giving teams real-time prevention (not
 just after-the-fact logging) and a full causal replay of what an agent actually did.
 
-**Status: feature-complete, Phases 0 through 9 of `docs/BUILD_PLAN.md` all done.** See `docs/PROGRESS.md` for the phase-by-phase
-build log and every design decision made along the way, or `docs/decisions.md` for the same decisions
-as a scannable index.
+**Status: feature-complete, Phases 0 through 9 of `docs/BUILD_PLAN.md` all done, and deployed.** See
+`docs/PROGRESS.md` for the phase-by-phase build log and every design decision made along the way, or
+`docs/decisions.md` for the same decisions as a scannable index.
+
+**Live**: [bastion-frontend.onrender.com](https://bastion-frontend.onrender.com) — sign up for your own
+org, or see `SETUP.md` to run it locally.
 
 ## Why now
 

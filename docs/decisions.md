@@ -88,6 +88,37 @@ on or correct earlier ones — noted where that happens).
   refresh token system" already existed for browser login (Phase 5) — the actual gap was that nothing
   let a *script* authenticate without an interactive login/refresh cycle, which personal tokens close
   without touching the existing JWT flow at all.
+- **Render deployment: JWT keys via env var, frontend proxies to public URLs not private networking
+  (post-launch, user-requested — "Ok deploy").** Live at
+  [bastion-frontend.onrender.com](https://bastion-frontend.onrender.com): three Docker web services
+  (interceptor, aggregator, frontend/nginx) plus a Key Value (Redis) instance, Neon for Postgres. Two
+  real deployment-specific problems, found only by actually deploying and testing against the live
+  URLs, not by reasoning about the infra in the abstract:
+  - **JWT keys have no shared filesystem across Render services.** docker-compose shares the Ed25519
+    keypair via a named volume populated by a one-shot key-generation container; Render has no
+    equivalent since each service is an independent container. Fixed by having each service's
+    entrypoint script write `JWT_PRIVATE_KEY_PEM`/`JWT_PUBLIC_KEY_PEM` env var content out to the file
+    paths `config.py` already reads, if set — `config.py` itself untouched, so docker-compose/k8s
+    (which never set these) behave exactly as before.
+  - **Render's private per-service networking (`bastion-interceptor:4001`) never resolved**, despite
+    matching every documented requirement — same region, same workspace, and (after fully deleting and
+    recreating all four resources inside a dedicated project/environment to test that specific theory)
+    same environment too. `nginx: [emerg] host not found in upstream` at boot, then, after switching to
+    a resolver-based lookup deferred to request time, `could not be resolved (3: Host not found)` at
+    request time instead — the DNS name genuinely isn't reachable through whatever this container's
+    resolver is, and no further-documented fix was found. Rather than keep chasing an apparently
+    undocumented private-DNS requirement, the frontend's nginx now proxies to the same public HTTPS
+    URLs a browser would use directly — proven to work (a real signup ran against the deployed
+    interceptor before this decision was even made), and no different in trust level since the public
+    endpoint already *is* the production access point. Found two more real bugs applying this fix
+    before it actually worked: an nginx directive-ordering bug (`rewrite ... break` silently prevents
+    any `set` directive placed after it in the same block from ever running, leaving `proxy_pass` with
+    an empty variable) and a `Host` header bug (forwarding the frontend's own hostname instead of
+    `$proxy_host` got a 403 from Cloudflare, since Render's edge routes and authorizes by Host header).
+  - Verified live end-to-end, not just per-service health checks: a real signup through
+    `bastion-frontend.onrender.com`'s actual UI (not curl) — org creation, JWT issuance with the
+    production keypair, redirect into a working dashboard — confirmed in a real browser against the
+    deployed stack.
 - **Overview became the new "/" landing page, Graph moved to "/graph".** The product previously opened
   straight into the 3D live graph, which is compelling once you have an agent running but is a dead end
   for literally everyone's first session (zero agents, zero traces, nothing to look at). An at-a-glance

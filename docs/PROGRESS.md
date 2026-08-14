@@ -1,11 +1,11 @@
 # BASTION — Progress Log
 
-## Status: build complete, post-launch additions in progress
-All of `docs/BUILD_PLAN.md` (Phases 0-9) plus the final documentation set are done. Now working through
-user-requested follow-ups: signup/registration (done), Neon Postgres connection (done), agents/policies/
-approvals management UI (done), visual design pass (done), Team/RBAC + Overview (done), Traces/Analytics/
-command palette (done), usability fixes + personal API tokens + Account page (done), Render deployment
-(next).
+## Status: build complete and deployed
+All of `docs/BUILD_PLAN.md` (Phases 0-9) plus the final documentation set are done, plus every
+post-launch follow-up requested since: signup/registration, Neon Postgres connection, agents/policies/
+approvals management UI, visual design pass, Team/RBAC + Overview, Traces/Analytics/command palette,
+usability fixes + personal API tokens + Account page, and now a live Render deployment. Live at
+[bastion-frontend.onrender.com](https://bastion-frontend.onrender.com).
 
 ## Log
 - [2026-08-14] Project specced out (PRD, ARCHITECTURE, DATA_MODEL, AUTH, API_SPEC, BUILD_PLAN written). No code yet.
@@ -715,13 +715,64 @@ command palette (done), usability fixes + personal API tokens + Account page (do
   - `docs/AUTH.md` §4, `docs/DATA_MODEL.md`, `docs/API_SPEC.md`, and the generated OpenAPI snapshot all
     updated in the same change. Frontend `typecheck`/`lint` clean.
 
+- [2026-08-14] Deployed to Render (post-launch, user-requested — "Ok deploy"). Live at
+  [bastion-frontend.onrender.com](https://bastion-frontend.onrender.com):
+  - **Infra**: three Docker web services (bastion-interceptor, bastion-aggregator, bastion-frontend)
+    built straight from the existing Dockerfiles, plus a free-tier Key Value (Redis) instance, all in
+    one Render project/environment. Postgres is Neon (already connected pre-launch); migration `0006`
+    (api_tokens, added this session) applied to it before deploying. Created via direct Render API
+    calls, not the `render` CLI's `services create` — the CLI has no way to express a Dockerfile at a
+    non-root path with a repo-root build context, which this monorepo needs (`dockerfilePath`/
+    `dockerContext` are Blueprint/API-only fields).
+  - **Real bug #1 — JWT keys have no shared filesystem across separate Render services.**
+    docker-compose shares the Ed25519 keypair via a named volume + one-shot key-gen container; Render's
+    per-service containers have no equivalent. Added `docker-entrypoint.sh` to interceptor/aggregator
+    that writes `JWT_PRIVATE_KEY_PEM`/`JWT_PUBLIC_KEY_PEM` env var content to the file paths
+    `config.py` already reads, if set — verified the exact logic locally (wrote real openssl-generated
+    keys via env var, confirmed the resulting file parses as a valid key) before ever deploying it.
+  - **Real bug #2 — Render's private per-service networking never worked.** `bastion-interceptor:4001`
+    (matching Render's documented hostname convention) wouldn't resolve from the frontend container —
+    first a boot-time crash (`nginx: [emerg] host not found in upstream`), then, after deferring
+    resolution to request time via nginx's `resolver` directive, a request-time failure instead
+    (`could not be resolved (3: Host not found)`). Suspected the missing piece was Render's newer
+    project/environment-scoped networking (our services had none), so deleted and recreated all four
+    resources inside a dedicated project + environment to test that theory directly — same failure.
+    Rather than keep chasing an apparently-undocumented private-DNS requirement, switched the frontend's
+    nginx to proxy to the backends' **public HTTPS URLs** instead (proven reachable — a real signup had
+    already succeeded against the deployed interceptor via plain curl before this decision was made).
+  - **Real bug #3 — nginx directive ordering, found applying the bug #2 fix.** `rewrite ... break`
+    silently halts every remaining `ngx_http_rewrite_module` directive in that block — a `set
+    $upstream ...` placed *after* `rewrite ... break` never ran, so `proxy_pass` received an empty
+    variable (`invalid URL prefix in "http://"`) on every request despite nginx booting fine. Fixed by
+    moving `set` before `rewrite` in all three proxied locations.
+  - **Real bug #4 — Host header, found testing bug #3's fix against the real backends.**
+    `proxy_set_header Host $host` forwarded the *frontend's own* hostname to the upstream; Render's
+    edge/Cloudflare route and authorize by Host header, so this got a clean 403 from Cloudflare, not a
+    connection error. Fixed by switching to `$proxy_host` (the upstream's own host:port).
+  - Every one of the four bugs above was caught by actually deploying and testing against the live
+    URLs — none were reproducible by reasoning about the Dockerfiles/configs in the abstract, and each
+    fix was verified locally (a real `docker build` + `docker run` against either a throwaway keypair
+    or the actual deployed backend URLs) before being pushed and redeployed, same discipline as every
+    other change this session.
+  - **Final verification**: not just `/healthz` pings — a real signup through
+    `bastion-frontend.onrender.com`'s actual UI in a real browser, confirming org creation, JWT
+    issuance with the production keypair, and a working post-signup dashboard, end to end through the
+    deployed nginx proxy.
+  - `README.md`, `docs/ARCHITECTURE.md` §7, and `docs/decisions.md` updated with the live URL and the
+    deployment-specific decisions above.
+
 ## Next up
-- Render deployment — next, now that the product itself (not just the backend) is actually usable
-  end-to-end and looks the part.
-- If resumed after that: worth resetting/isolating the dev Postgres before anything latency-sensitive
-  (thousands of accumulated `test-org-*` rows from every phase's test runs share the same dev DB) and
-  building the CI-gated version of the API drift check `docs/api/DRIFT.md` describes but doesn't
-  implement.
+- Nothing blocking. Worth revisiting if picked back up:
+  - Resetting/isolating the dev Postgres before anything latency-sensitive (thousands of accumulated
+    `test-org-*` rows from every phase's test runs share the same dev DB) and building the CI-gated
+    version of the API drift check `docs/api/DRIFT.md` describes but doesn't implement.
+  - Render's free-tier services showed some edge-routing flakiness (`x-render-routing: no-server`)
+    intermittently in the minutes right after creation, even though the app itself was continuously
+    healthy per its own logs the whole time — self-resolved within a few minutes and hasn't recurred
+    since, but worth knowing about if the deployed URLs ever seem to intermittently 404 again.
+  - A real, matching root cause for bug #2 (why the documented private-networking hostname convention
+    didn't work here) was never found — worth a support ticket to Render if it matters later (e.g. for
+    latency), but the public-URL workaround is a legitimate permanent architecture, not just a stopgap.
 
 ## Known deviations from BUILD_PLAN.md
 - None in phase *order*. Implementation-level deviations from the original spec docs, all flagged in
