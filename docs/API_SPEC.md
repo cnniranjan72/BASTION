@@ -19,7 +19,11 @@ Called by the SDK for every tool call.
   "parent_span_id": "uuid | null",
   "tool_name": "payments.charge",
   "args": { "amount": 75, "currency": "USD" },
-  "agent_id": "uuid"
+  "agent_id": "uuid",
+  "idempotency_key": "uuid | null" /* v2, UPGRADE_ARCHITECTURE.md §3 — optional at the wire
+                                       level, but the Python SDK always generates and reuses one
+                                       per logical call across its own retries; omitting it gets
+                                       v1's original behavior, always a fresh span, no dedup */
 }
 // Response (allowed)
 {
@@ -53,6 +57,12 @@ agent; the request body's `agent_id` must match the authenticated agent or
 the call is rejected (`AGENT_MISMATCH`, 403) — the key alone determines
 identity, `agent_id` in the body is a stated-identity check, not a trust
 source.
+
+**Idempotency (v2, ADR-004/ADR-005)**: when `idempotency_key` is supplied, a repeated call with the
+same `(agent_id, idempotency_key)` returns the original stored decision instead of re-evaluating —
+same `span_id`, same response body, no duplicate `CallAttempted`/decision event. Under real
+concurrency (two+ callers racing on the same key simultaneously), the loser(s) wait up to 2 seconds
+for the winner's result; if it hasn't completed by then, `503 IDEMPOTENT_REQUEST_IN_PROGRESS`.
 
 ### `POST /spans/{span_id}/complete`
 **Not in the original spec — added in Phase 1, see docs/ARCHITECTURE.md §7.**

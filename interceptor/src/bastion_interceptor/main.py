@@ -28,6 +28,7 @@ instead of the Phase 2-4 explicit `org_id` param stopgap.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import secrets
 import time
@@ -420,11 +421,55 @@ async def intercept(
         return await _intercept(body, request, agent)
 
 
+InterceptResponseUnion = (
+    InterceptAllowedResponse | InterceptBlockedResponse | InterceptPendingResponse
+)
+
+
+def _parse_cached_intercept_response(body: dict[str, Any]) -> InterceptResponseUnion:
+    decision = body.get("decision")
+    if decision == "allowed":
+        return InterceptAllowedResponse.model_validate(body)
+    if decision == "blocked":
+        return InterceptBlockedResponse.model_validate(body)
+    if decision == "pending_approval":
+        return InterceptPendingResponse.model_validate(body)
+    raise ValueError(f"unrecognized cached intercept decision: {decision!r}")
+
+
+async def _await_idempotent_result(
+    agent_id: UUID, idempotency_key: str, *, wait: bool
+) -> InterceptResponseUnion | None:
+    """U2 (v2 upgrade), UPGRADE_ARCHITECTURE.md §3. `wait=False` is the fast
+    path for a plain sequential retry (row already completed, or no row at
+    all yet — proceed to try reserving). `wait=True` is only reached after
+    losing the reservation race to a concurrent identical request: the
+    winner is mid-flight, so this polls briefly rather than erroring —
+    real evaluation is sub-millisecond (in-memory policy cache) plus a
+    couple of DB round trips, so a live race resolves in milliseconds, not
+    the seconds this budget allows."""
+    record = await db.get_idempotency_record(agent_id, idempotency_key)
+    if record is None:
+        return None
+    if record["status"] == "completed":
+        return _parse_cached_intercept_response(record["response_body"])
+    if not wait:
+        return None
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline:
+        await asyncio.sleep(0.02)
+        record = await db.get_idempotency_record(agent_id, idempotency_key)
+        assert record is not None
+        if record["status"] == "completed":
+            return _parse_cached_intercept_response(record["response_body"])
+    return None
+
+
 async def _intercept(
     body: InterceptRequest,
     request: Request,
     agent: AuthenticatedAgent,
-) -> InterceptAllowedResponse | InterceptBlockedResponse | InterceptPendingResponse:
+) -> InterceptResponseUnion:
     if body.agent_id != agent.id:
         raise HTTPException(
             status_code=403,
@@ -437,8 +482,55 @@ async def _intercept(
             },
         )
 
+    idempotency_key = body.idempotency_key
+    if idempotency_key is not None:
+        cached = await _await_idempotent_result(agent.id, idempotency_key, wait=False)
+        if cached is not None:
+            return cached
+
     span_id = uuid.uuid4()
 
+    reservation = None
+    if idempotency_key is not None:
+        reservation = await db.try_reserve_idempotency_key(
+            org_id=agent.org_id,
+            agent_id=agent.id,
+            idempotency_key=idempotency_key,
+            trace_id=body.trace_id,
+            span_id=span_id,
+            parent_span_id=body.parent_span_id,
+        )
+        if reservation is None:
+            # Lost the race between the read above and this INSERT — a
+            # concurrent identical request won. Wait for its result instead
+            # of evaluating a second time (the actual "exactly once" guarantee).
+            cached = await _await_idempotent_result(agent.id, idempotency_key, wait=True)
+            if cached is not None:
+                return cached
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "error": {
+                        "code": "IDEMPOTENT_REQUEST_IN_PROGRESS",
+                        "message": (
+                            "a concurrent request with this idempotency key is still processing"
+                        ),
+                        "request_id": request.state.request_id,
+                    }
+                },
+            )
+
+    response = await _decide_and_record(body, agent, span_id)
+
+    if reservation is not None:
+        await db.complete_idempotency_key(reservation["id"], response.model_dump(mode="json"))
+
+    return response
+
+
+async def _decide_and_record(
+    body: InterceptRequest, agent: AuthenticatedAgent, span_id: UUID
+) -> InterceptResponseUnion:
     # U1: every call-status transition goes through the state machine
     # (CLAUDE_UPGRADE.md rule #3) — `state` tracks this span's CallState
     # procedurally through the function, guarded before each event write.

@@ -508,6 +508,58 @@ class Database:
             user_id,
         )
 
+    # -- Idempotency keys (U2, v2 upgrade) -------------------------------
+
+    async def try_reserve_idempotency_key(
+        self,
+        *,
+        org_id: UUID,
+        agent_id: UUID,
+        idempotency_key: str,
+        trace_id: UUID,
+        span_id: UUID,
+        parent_span_id: UUID | None,
+    ) -> asyncpg.Record | None:
+        """Returns the reserved row if this call won the race, None if a
+        row for (agent_id, idempotency_key) already exists — the unique
+        index is the actual arbiter under concurrency (UPGRADE_ARCHITECTURE.md
+        §3), not a check-then-insert race in application code."""
+        return await self.pool.fetchrow(
+            """
+            INSERT INTO idempotency_keys
+                (org_id, agent_id, idempotency_key, trace_id, span_id, parent_span_id)
+            VALUES ($1, $2, $3, $4, $5, $6)
+            ON CONFLICT (agent_id, idempotency_key) DO NOTHING
+            RETURNING *
+            """,
+            org_id,
+            agent_id,
+            idempotency_key,
+            trace_id,
+            span_id,
+            parent_span_id,
+        )
+
+    async def get_idempotency_record(
+        self, agent_id: UUID, idempotency_key: str
+    ) -> asyncpg.Record | None:
+        return await self.pool.fetchrow(
+            "SELECT * FROM idempotency_keys WHERE agent_id = $1 AND idempotency_key = $2",
+            agent_id,
+            idempotency_key,
+        )
+
+    async def complete_idempotency_key(self, row_id: UUID, response_body: dict[str, Any]) -> None:
+        await self.pool.execute(
+            """
+            UPDATE idempotency_keys
+            SET status = 'completed', response_body = $1, completed_at = now()
+            WHERE id = $2
+            """,
+            response_body,
+            row_id,
+        )
+
     async def insert_refresh_token(
         self, *, user_id: UUID, token_hash: str, family_id: UUID, expires_at: Any
     ) -> asyncpg.Record:

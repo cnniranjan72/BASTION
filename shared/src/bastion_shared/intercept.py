@@ -14,6 +14,14 @@ class InterceptRequest(BaseModel):
     tool_name: str
     args: dict[str, Any]
     agent_id: UUID
+    # U2 (v2 upgrade), UPGRADE_ARCHITECTURE.md §3. Optional at the wire
+    # level for backward compatibility with any raw HTTP caller — the
+    # Python SDK always generates and attaches one per logical call
+    # (bastion/client.py), so real callers get the guarantee by default. A
+    # call made without one gets v1's original behavior: always a fresh
+    # span, no dedup, no idempotency protection — a deliberate, documented
+    # degrade, not a silent gap.
+    idempotency_key: str | None = None
 
 
 class InterceptAllowedResponse(BaseModel):

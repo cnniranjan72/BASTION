@@ -8,6 +8,7 @@ gap this product exists to close).
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from collections.abc import Awaitable, Callable
@@ -78,18 +79,20 @@ class BastionClient:
         trace_id = parent.trace_id if parent is not None else uuid4()
         parent_span_id = parent.span_id if parent is not None else None
 
+        # U2 (v2 upgrade), UPGRADE_ARCHITECTURE.md §3: generated once per
+        # logical call and reused verbatim across every retry below — this
+        # is the actual mechanism that turns "agent retries a network
+        # failure" into "same decision returned, no duplicate side effect"
+        # instead of a second, independent /intercept evaluation.
         intercept_request = InterceptRequest(
             trace_id=trace_id,
             parent_span_id=parent_span_id,
             tool_name=tool_name,
             args=args,
             agent_id=self.agent_id,
+            idempotency_key=str(uuid4()),
         )
-        response = await self._http.post(
-            "/intercept", json=intercept_request.model_dump(mode="json")
-        )
-        response.raise_for_status()
-        body = response.json()
+        body = await self._post_intercept_with_retry(intercept_request)
 
         if body["decision"] == "blocked":
             raise BastionBlockedError(
@@ -117,6 +120,34 @@ class BastionClient:
             return result
         finally:
             reset_current_span(token)
+
+    async def _post_intercept_with_retry(
+        self, intercept_request: InterceptRequest, *, max_attempts: int = 3
+    ) -> dict[str, Any]:
+        """Retries only network/transport failures (connection reset,
+        timeout) — never an HTTP error response, which is a real decision
+        from the interceptor (blocked, 4xx, 5xx) that retrying blindly
+        wouldn't change. Safe to retry at all only because
+        intercept_request.idempotency_key is fixed across every attempt:
+        a retry after the first attempt's response was simply lost in
+        transit returns that same original decision instead of evaluating
+        the policy a second time."""
+        last_error: httpx.TransportError | None = None
+        for attempt in range(max_attempts):
+            if attempt > 0:
+                await asyncio.sleep(0.1 * (2**attempt))
+            try:
+                response = await self._http.post(
+                    "/intercept", json=intercept_request.model_dump(mode="json")
+                )
+            except httpx.TransportError as exc:
+                last_error = exc
+                continue
+            response.raise_for_status()
+            result: dict[str, Any] = response.json()
+            return result
+        assert last_error is not None
+        raise last_error
 
     async def _wait_for_approval(self, poll_url: str) -> None:
         deadline = time.monotonic() + self._approval_max_wait

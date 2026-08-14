@@ -781,7 +781,7 @@ Target architecture: `UPGRADE_ARCHITECTURE.md`. Target frontend: `FRONTEND_V2.md
 file before starting (migrations 0001–0006 present, 67 tests passing, live on Render, aggregator
 confirmed still on Postgres LISTEN/NOTIFY per v1 design) — no mismatch found.
 
-**Current phase**: U1 complete, U2 in progress.
+**Current phase**: U1 and U2 complete, U3 next.
 
 ### Phase status
 - **U1 — Explicit state machine: done.** `shared/src/bastion_shared/call_state.py` — `CallState` enum
@@ -791,20 +791,36 @@ confirmed still on Postgres LISTEN/NOTIFY per v1 design) — no mismatch found.
   ad-hoc check that existed (`/spans/{id}/complete`'s manual `event_type not in (...)`) with the same
   mechanism every transition now goes through. Milestone test: `shared/tests/test_call_state.py`, 95
   cases, exhaustive over the full state × state matrix (every legal edge, every illegal pair, every
-  terminal state rejecting everything) — passing. Full workspace suite: 162 passed (was 67; +95 new).
-  ADR-017 written (not in the required index — TERMINAL/APPROVED modeling decision, flagged as
-  ADR-worthy per `ADR_INDEX.md`'s "add new ADRs as new non-obvious decisions get made").
-- **U2 — Idempotency**: in progress.
+  terminal state rejecting everything) — passing. ADR-017 written (not in the required index —
+  TERMINAL/APPROVED modeling decision, flagged as ADR-worthy per `ADR_INDEX.md`'s "add new ADRs as
+  new non-obvious decisions get made").
+- **U2 — Idempotency: done.** Migration `0007_idempotency_keys.sql` — `UNIQUE (agent_id,
+  idempotency_key)`, the actual concurrency arbiter (ADR-005 explains why not `trace_id`/`span_id` in
+  the key, contra UPGRADE_ARCHITECTURE.md §3's original draft — `span_id` doesn't exist yet when a
+  retry needs to find the row). `InterceptRequest.idempotency_key` added (optional, backward
+  compatible). `/intercept` now: fast-path lookup for a completed key → reserve via
+  `INSERT ... ON CONFLICT DO NOTHING` → losers of a concurrent race poll up to 2s for the winner's
+  result (`503 IDEMPOTENT_REQUEST_IN_PROGRESS` past that) → winner's response cached on completion.
+  SDK (`sdk-python/bastion/client.py`) generates one key per logical `call()` and reuses it across up
+  to 3 retries of transport failures only (never retries a real HTTP decision). Milestone test
+  (`interceptor/tests/test_idempotency.py`, 4 cases): 5 concurrent identical `/intercept` calls →
+  exactly one `CallAttempted` event, all 5 responses share one `span_id` — passed on first attempt.
+  Also covers sequential retry, independent keys staying independent, and no-key preserving v1
+  behavior exactly. ADR-004 and ADR-005 written. Full workspace suite: 166 passed (was 162; +4 new).
 - U3–U16: not started.
 
 ### ADR checklist (mirrors `ADR_INDEX.md`)
-- [ ] ADR-001 through ADR-016: not yet written (scheduled for the phases that produce them per
-  `UPGRADE_BUILD_PLAN.md` — e.g. ADR-004/005 land with U2, ADR-001/002/003/014 with U3).
-- [x] ADR-017 (unlisted, added this phase): call state machine modeling — see
+- [x] ADR-004: at-least-once delivery + idempotent processing — `docs/adr/ADR-004-...md`.
+- [x] ADR-005: idempotency key design and enforcement — `docs/adr/ADR-005-...md`.
+- [ ] ADR-001, 002, 003, 006–016: not yet written (scheduled for the phases that produce them per
+  `UPGRADE_BUILD_PLAN.md` — e.g. ADR-001/002/003/014 land with U3).
+- [x] ADR-017 (unlisted, added U1): call state machine modeling — see
   `docs/adr/ADR-017-call-state-machine-modeling.md`.
 
 ### Chaos / load test status
 Not started (U13/U14).
+
+## Known deviations from BUILD_PLAN.md
 - None in phase *order*. Implementation-level deviations from the original spec docs, all flagged in
   code/API_SPEC.md/ARCHITECTURE.md rather than silently guessed: (1) interceptor language (Phase 0,
   §7), (2) interceptor doesn't proxy the real downstream call, the SDK does (Phase 1, §8), (3)
