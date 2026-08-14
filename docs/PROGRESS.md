@@ -781,7 +781,7 @@ Target architecture: `UPGRADE_ARCHITECTURE.md`. Target frontend: `FRONTEND_V2.md
 file before starting (migrations 0001–0006 present, 67 tests passing, live on Render, aggregator
 confirmed still on Postgres LISTEN/NOTIFY per v1 design) — no mismatch found.
 
-**Current phase**: U1–U6 complete, U7 next.
+**Current phase**: U1–U7 complete, U8 next.
 
 ### Phase status
 - **U1 — Explicit state machine: done.** `shared/src/bastion_shared/call_state.py` — `CallState` enum
@@ -963,7 +963,25 @@ confirmed still on Postgres LISTEN/NOTIFY per v1 design) — no mismatch found.
   for this. Confirmed fixed: 5/5 clean runs of the previously-failing 3-file combo, plus a full
   workspace run (180 passed) with the flake absent. This closes the "open, not fully resolved" item
   from U3/U5's notes below — superseded by this entry, not still open.
-- U7–U16: not started.
+- **U7 — Security subsystem extension: done.** Personal API tokens (the first bullet) were already
+  fully implemented in v1 (`AUTH.md` §4, "post-launch, add an access token system for outside users")
+  — confirmed via survey, no new code needed. The real new work: the explicit `Subject → Role →
+  Resource → Action → Policy` authorization chain (`interceptor/authorization.py`, ADR-018 —
+  unlisted in `ADR_INDEX.md`, added per its own "non-obvious decisions" instruction, same reasoning
+  as ADR-017). Reuses `policy_engine.evaluate()` literally, not just conceptually: an authorization
+  policy is a normal `policies`/`policy_sets` row, created/activated through the exact same
+  `POST /policies` + `POST /policies/{id}/activate` endpoints, found via a reserved well-known name
+  per org (`__bastion_authorization__`) instead of `agents.default_policy_set_id` — zero new schema,
+  zero new endpoints. Wired into `_resolve_approval`: the underlying call's `tool_name`/`args` plus
+  the approver's own `role` become the `resource`/`action` evaluated against it; a non-`allow`
+  decision returns `403 AUTHORIZATION_DENIED` with the same `Decision.reason` shape a tool-call block
+  already produces — literally the same string template, proven directly by the milestone test.
+  Milestone test (`interceptor/tests/test_authorization_chain.py`, 3 cases): a $250 approval blocked
+  by an authorization policy capping approvals at $200, with the "Why?" reason confirmed identical in
+  shape to a tool-call block's; a $150 approval under the cap allowed end-to-end; and (not from the
+  milestone wording, but necessary for the backward-compatibility claim) an org with no authorization
+  policy configured at all behaves exactly as before U7 — all 3 passed on first run.
+- U8–U16: not started.
 
 ### ADR checklist (mirrors `ADR_INDEX.md`)
 - [x] ADR-001: PostgreSQL as source of truth — `docs/adr/ADR-001-...md`.

@@ -88,7 +88,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
-from . import circuit_breaker
+from . import authorization, circuit_breaker
 from . import limits as limits_engine
 from . import policy as policy_engine
 from .auth import AuthenticatedAgent, authenticate_agent, hash_api_key
@@ -1211,6 +1211,36 @@ async def list_pending_approvals(
 async def _resolve_approval(
     approval_id: UUID, status: str, request: Request, user: AuthenticatedUser
 ) -> ApprovalRequestResponse:
+    # U7 (v2 upgrade), UPGRADE_ARCHITECTURE.md §9: an explicit
+    # Subject -> Role -> Resource -> Action -> Policy authorization check,
+    # reusing the tool-call policy evaluator (authorization.py) — additive
+    # to, never a replacement for, the RBAC role check `require_approver`
+    # already enforces at the route level. A no-op (allow) for any org
+    # that hasn't configured an authorization policy, preserving v1
+    # behavior exactly for every org that predates this feature.
+    pending = await db.get_approval_request(approval_id)
+    if pending is not None:
+        call_payload = await db.get_call_attempted_payload(pending["span_id"])
+        action = "approve" if status == "approved" else "deny"
+        resource: dict[str, Any] = {"role": user.role}
+        if call_payload is not None:
+            resource["tool_name"] = call_payload["tool_name"]
+            resource.update(call_payload["args"])
+        decision = await authorization.check_authorization(
+            org_id=user.org_id, action=action, resource=resource
+        )
+        if decision.action != "allow":
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": {
+                        "code": "AUTHORIZATION_DENIED",
+                        "message": decision.reason or f"not authorized to {action} this request",
+                        "request_id": request.state.request_id,
+                    }
+                },
+            )
+
     # Real bug, found and fixed this session while investigating a
     # previously-documented intermittent test failure
     # (test_approval_flow_pauses_and_resumes_on_approve — see PROGRESS.md):

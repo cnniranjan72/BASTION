@@ -219,17 +219,17 @@ class Database:
             ),
         )
 
-    async def get_span_tool_name(self, span_id: UUID) -> str | None:
-        """U6 (v2 upgrade): the circuit breaker (circuit_breaker.py) is
-        keyed by (agent_id, tool_name), but /spans/{id}/complete's own
-        lookup (get_span_decision, above) only ever selects the terminal
-        decision event's columns — tool_name lives in CallAttempted's
-        payload instead, a separate event for the same span."""
+    async def get_call_attempted_payload(self, span_id: UUID) -> dict[str, Any] | None:
+        """This span's original CallAttemptedPayload (`{tool_name, args}`) —
+        used both by the circuit breaker (U6, keyed on tool_name, which
+        isn't on get_span_decision's terminal-decision-event columns) and
+        by the authorization chain (U7, needs the underlying call's `args`
+        — e.g. `amount` — to evaluate an approval action against)."""
         return cast(
-            "str | None",
+            "dict[str, Any] | None",
             await self.pool.fetchval(
                 """
-                SELECT payload->>'tool_name' FROM events
+                SELECT payload FROM events
                 WHERE span_id = $1 AND event_type = 'CallAttempted'
                 LIMIT 1
                 """,
@@ -237,7 +237,24 @@ class Database:
             ),
         )
 
+    async def get_span_tool_name(self, span_id: UUID) -> str | None:
+        payload = await self.get_call_attempted_payload(span_id)
+        return payload["tool_name"] if payload is not None else None
+
     # -- Policies (Phase 2) --------------------------------------------
+
+    async def get_policy_set_id_by_name(self, org_id: UUID, name: str) -> UUID | None:
+        """U7 (v2 upgrade): looks up a policy_set by its stable (org_id,
+        name) identity directly — authorization.py uses this to find an
+        org's authorization policy set by its reserved well-known name,
+        the same lookup create_policy already does internally when
+        resolving which set a new version belongs to."""
+        return cast(
+            "UUID | None",
+            await self.pool.fetchval(
+                "SELECT id FROM policy_sets WHERE org_id = $1 AND name = $2", org_id, name
+            ),
+        )
 
     async def get_active_policies(self) -> list[asyncpg.Record]:
         """Bootstraps the in-memory policy cache at startup."""
