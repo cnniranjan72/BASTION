@@ -77,6 +77,32 @@ services:
       timeout: 10s
       retries: 15
 
+  minio:
+    # S3-compatible object storage — U9, v2 upgrade, UPGRADE_ARCHITECTURE.md
+    # §12. Large tool-call payloads (above object_storage_payload_threshold_bytes)
+    # get offloaded here; Postgres keeps only a small pointer object. Losing
+    # this container loses the large-payload *bodies* (not the events they
+    # belong to, which stay durable in Postgres either way) — an accepted,
+    # documented risk for local dev, not a design meant for production
+    # without real backing storage/replication.
+    image: minio/minio:latest
+    container_name: bastion-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9011"
+    ports:
+      - '9010:9000'   # S3 API
+      - '9011:9011'   # web console
+    environment:
+      MINIO_ROOT_USER: bastion
+      MINIO_ROOT_PASSWORD: bastion123
+    volumes:
+      - miniodata:/data
+    healthcheck:
+      test: ['CMD', 'mc', 'ready', 'local']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   generate-keys:
     build:
       context: ../..
@@ -179,4 +205,5 @@ services:
 volumes:
   pgdata:
   redisdata:
+  miniodata:
   jwtkeys:

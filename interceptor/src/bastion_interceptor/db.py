@@ -9,6 +9,7 @@ from uuid import UUID
 import asyncpg
 from bastion_shared import EventType
 
+from . import object_storage
 from .config import config
 
 
@@ -37,15 +38,27 @@ class Database:
         self._app_pool: asyncpg.Pool | None = None
 
     async def connect(self) -> None:
+        # U9 (v2 upgrade), UPGRADE_ARCHITECTURE.md §11: command_timeout
+        # bounds every individual query on this pool — a hung/runaway query
+        # can no longer hold a connection (and, transitively, exhaust the
+        # pool under load) forever.
         self._pool = await asyncpg.create_pool(
-            config.database_url, min_size=1, max_size=10, init=_init_connection
+            config.database_url,
+            min_size=1,
+            max_size=10,
+            init=_init_connection,
+            command_timeout=config.db_query_timeout_seconds,
         )
         # U8 (v2 upgrade): a separate pool, connected as the non-superuser
         # `bastion_app` role — see org_scoped_connection below and ADR-009
         # for why RLS needs this rather than just adding policies to the
         # pool above.
         self._app_pool = await asyncpg.create_pool(
-            config.app_database_url, min_size=1, max_size=5, init=_init_connection
+            config.app_database_url,
+            min_size=1,
+            max_size=5,
+            init=_init_connection,
+            command_timeout=config.db_query_timeout_seconds,
         )
 
     async def close(self) -> None:
@@ -164,7 +177,15 @@ class Database:
         inserts for the *same* trace serialize (strictly increasing, no
         gaps, no duplicates) while inserts for *different* traces never
         block each other.
+
+        U9 (v2 upgrade): `payload` is run through `object_storage.upload_if_large`
+        first — under the threshold, it passes through unchanged; at or
+        above it, both this row's and the outbox row's payload become the
+        same small pointer object, never the large payload itself. This
+        keeps `events`/`outbox_events` rows bounded in size regardless of
+        how large a tool's actual response was.
         """
+        payload = await object_storage.upload_if_large(payload)
         events_query = """
             INSERT INTO events
                 (trace_id, span_id, parent_span_id, agent_id, event_type, payload, sequence_number)
@@ -265,8 +286,16 @@ class Database:
         used both by the circuit breaker (U6, keyed on tool_name, which
         isn't on get_span_decision's terminal-decision-event columns) and
         by the authorization chain (U7, needs the underlying call's `args`
-        — e.g. `amount` — to evaluate an approval action against)."""
-        return cast(
+        — e.g. `amount` — to evaluate an approval action against).
+
+        U9 (v2 upgrade): resolved through object_storage.resolve_payload —
+        a caller here always gets the real payload back, transparently,
+        whether it was stored inline or offloaded. This is (deliberately,
+        see object_storage.py's module docstring) the one payload-reading
+        call site retrofitted this phase; get_events_for_trace's rows stay
+        raw Records (payload is one of several fields there, not cleanly
+        wrappable without a larger interface change) and are not resolved."""
+        raw = cast(
             "dict[str, Any] | None",
             await self.pool.fetchval(
                 """
@@ -277,6 +306,9 @@ class Database:
                 span_id,
             ),
         )
+        if raw is None:
+            return None
+        return await object_storage.resolve_payload(raw)
 
     async def get_span_tool_name(self, span_id: UUID) -> str | None:
         payload = await self.get_call_attempted_payload(span_id)

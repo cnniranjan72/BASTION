@@ -91,17 +91,19 @@ identity across versions: agents and policy rows both point at the set, and
 ### `events` (append-only, the event-sourcing core)
 | column | type | notes |
 |---|---|---|
-| event_id | uuid pk | |
+| event_id | uuid, part of composite pk `(event_id, created_at)` | see U9 note below for why `created_at` joined the key |
 | trace_id | uuid | groups a full agent run |
 | span_id | uuid | this specific call |
 | parent_span_id | uuid nullable | causal parent |
 | agent_id | uuid fk | |
 | event_type | enum | CallAttempted / PolicyEvaluated / CallAllowed / CallBlocked / CallPendingApproval / ApprovalGranted / ApprovalDenied / CallCompleted / CallFailed |
-| payload | jsonb | tool name, args, policy decision reasoning, latency, cost, etc. |
-| sequence_number | bigint | strictly increasing per trace, for ordering |
-| created_at | timestamptz | |
+| payload | jsonb | tool name, args, policy decision reasoning, latency, cost, etc. — OR, for a payload at/above `object_storage_payload_threshold_bytes` (U9, v2 upgrade, `docs/adr/ADR-011`), a small pointer `{"storage": "s3", "uri": ..., "hash": ..., "size_bytes": ...}` in place of the real content, which then lives in object storage instead |
+| sequence_number | bigint, part of composite unique `(trace_id, sequence_number, created_at)` | strictly increasing per trace, for ordering |
+| created_at | timestamptz | also the partition key, see below |
 
 No updates or deletes on this table. Ever. Enforce with a DB trigger or role permission, not just app-level discipline.
+
+**U9 (v2 upgrade)**: `events` is a partitioned table (`PARTITION BY RANGE (created_at)`, migration `0012`) — monthly partitions (`events_2026_01`, ...), a `DEFAULT` catch-all, `bastion_ensure_events_partition()` creates future months on demand. Postgres requires every UNIQUE/PRIMARY KEY constraint on a partitioned table to include the partition key, which is why `event_id`'s primary key and the `(trace_id, sequence_number)` uniqueness constraint both gained `created_at` — functionally unchanged (both were already effectively unique on their own), just formally composite now. Retention: 90 days hot, then archived to object storage and detached (`docs/adr/ADR-010`, `interceptor/retention.py`) — a callable maintenance operation, not yet wired to a scheduler.
 
 ### `approval_requests`
 | column | type | notes |
@@ -134,4 +136,4 @@ This table exists purely for query performance. If it's ever inconsistent with `
 - `events(trace_id, sequence_number)` — the core replay query
 - `events(agent_id, created_at)` — for recent-activity queries per agent
 - `trace_summaries(org_id, started_at desc)` — dashboard "recent traces" list
-- Consider partitioning `events` by month once volume grows — mention this even if you don't implement it; shows you understand operational lifecycle of an append-only table.
+- `events` partitioned by month (U9, v2 upgrade) — implemented, not just considered; see the `events` table's U9 note above and `docs/adr/ADR-010`.

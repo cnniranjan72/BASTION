@@ -781,7 +781,7 @@ Target architecture: `UPGRADE_ARCHITECTURE.md`. Target frontend: `FRONTEND_V2.md
 file before starting (migrations 0001–0006 present, 67 tests passing, live on Render, aggregator
 confirmed still on Postgres LISTEN/NOTIFY per v1 design) — no mismatch found.
 
-**Current phase**: U1–U8 complete, U9 next.
+**Current phase**: U1–U9 complete, U10 next.
 
 ### Phase status
 - **U1 — Explicit state machine: done.** `shared/src/bastion_shared/call_state.py` — `CallState` enum
@@ -1005,7 +1005,45 @@ confirmed still on Postgres LISTEN/NOTIFY per v1 design) — no mismatch found.
   unaffected by RLS (documenting exactly why the second role was needed); `list_agents`'s real
   retrofit proven end-to-end; every RLS-enabled table's `pg_class` flags checked directly as a
   regression guard. All 12 passed after the one real fix. ADR-009 written.
-- U9–U16: not started.
+- **U9 — Database evolution: partitioning, retention, object storage: done.** The highest-risk phase
+  so far, given `events` is actively read/written by nearly every test in the suite — handled with
+  extra care (row-count verification before/after against a local DB with 36,719 real accumulated
+  rows, not just CI's always-empty case; a failed first migration attempt caught by Postgres's own
+  transactional DDL rolling back cleanly with zero data loss, confirmed directly, not assumed).
+  Migration `0012_events_partitioning.sql`: renamed the existing table aside, rebuilt `events` as
+  `PARTITION BY RANGE (created_at)` (Postgres can't convert an existing table in place), 12 named
+  monthly partitions for 2026 + a `DEFAULT` catch-all, triggers/indexes redefined once on the parent
+  (auto-inherited since PG11). Two real constraints hit and resolved, not silently avoided: every
+  UNIQUE/PK constraint on a partitioned table must include the partition key (`event_id`/`trace_id`+
+  `sequence_number` both gained `created_at`), and `RENAME TABLE` doesn't rename its indexes (a first
+  migration attempt failed with `DuplicateTableError`, fixed by explicitly renaming the old indexes
+  first). `bastion_ensure_events_partition()` (idempotent) handles new months going forward.
+  **Retention**: 90 days hot, picked and defended (ADR-010) — `retention.py`'s `run_retention_sweep`
+  is a callable maintenance operation (`python -m bastion_interceptor.retention`), not an
+  auto-scheduled job (no scheduler infra exists in this project; a real deployment-topology decision
+  explicitly out of scope). **Object storage** (ADR-011): MinIO locally (new docker-compose service;
+  GitHub Actions' declarative `services:` block can't override a container's command the way MinIO's
+  image needs, so CI launches it via a `docker run` step instead — a well-known workaround for that
+  exact limitation), `aioboto3` client, 8KB threshold, SHA-256 content-addressed dedup (proven
+  directly, not just designed for). `upload_if_large` wired into `db.insert_event` (every write);
+  `resolve_payload` wired into `db.get_call_attempted_payload` only — `get_events_for_trace`'s raw
+  `Record`s and the aggregator's `fold_events_to_graph` are NOT retrofitted, stated explicitly rather
+  than silently claimed complete. **Object storage failures fail open on the write path** (falls back
+  to inline storage, matching CLAUDE.md rule #4's posture already established for U6) — implemented,
+  not just flagged as a gap; the read-side equivalent is a real, deliberately un-fixed gap, documented
+  honestly in ADR-011 rather than assumed symmetric. Query timeouts (`command_timeout`) added to
+  every connection pool (interceptor's two, aggregator's one) — a real new protection. Connection
+  pooling itself (PgBouncer) and the read replica are explicitly NOT added — the former because
+  `asyncpg.create_pool` already provides in-process pooling with no load-test evidence (U13, not yet
+  run) that more is needed; the latter is correctly deferred to U10 by the build plan's own ordering.
+  Milestone tests: `test_events_partitioning.py` (3 cases, including a real `EXPLAIN (FORMAT JSON)`
+  check proving a date-range query only plans to touch its own month's partition — not neighbors, not
+  the default), `test_object_storage.py` (6 cases), `test_retention.py` (3 cases, against synthetic
+  2020/2021 partitions, never touching real dev data) — 12 new tests total, all passing, full
+  workspace suite at 207 passed after Kafka container reset (an unrelated, already-documented
+  environmental flake reproduced once during verification and was confirmed absent on rerun — not a
+  U9 regression). ADR-010 and ADR-011 written.
+- U10–U16: not started.
 
 ### ADR checklist (mirrors `ADR_INDEX.md`)
 - [x] ADR-001: PostgreSQL as source of truth — `docs/adr/ADR-001-...md`.

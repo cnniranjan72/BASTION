@@ -44,6 +44,18 @@ class Config:
     # Postgres, self-healing any drift from a missed Redis pub/sub message.
     # Bounds the worst-case staleness window after a missed broadcast.
     policy_reconciliation_interval_seconds: float
+    # U9 (v2 upgrade), UPGRADE_ARCHITECTURE.md §11: every query on this pool
+    # gets this as its statement_timeout-equivalent (asyncpg's per-query
+    # command_timeout) — a hung/runaway query can no longer hold a
+    # connection (and, transitively, exhaust the pool) forever.
+    db_query_timeout_seconds: float
+    # U9, §12: payloads at or above this size (bytes, serialized JSON) get
+    # offloaded to object storage instead of stored inline in Postgres.
+    object_storage_payload_threshold_bytes: int
+    object_storage_endpoint_url: str
+    object_storage_access_key: str
+    object_storage_secret_key: str
+    object_storage_bucket: str
 
 
 def load_config() -> Config:
@@ -70,6 +82,16 @@ def load_config() -> Config:
         policy_reconciliation_interval_seconds=float(
             os.environ.get("POLICY_RECONCILIATION_INTERVAL_SECONDS", "30")
         ),
+        db_query_timeout_seconds=float(os.environ.get("DB_QUERY_TIMEOUT_SECONDS", "30")),
+        object_storage_payload_threshold_bytes=int(
+            os.environ.get("OBJECT_STORAGE_PAYLOAD_THRESHOLD_BYTES", str(8 * 1024))
+        ),
+        object_storage_endpoint_url=os.environ.get(
+            "OBJECT_STORAGE_ENDPOINT_URL", "http://localhost:9010"
+        ),
+        object_storage_access_key=os.environ.get("OBJECT_STORAGE_ACCESS_KEY", "bastion"),
+        object_storage_secret_key=os.environ.get("OBJECT_STORAGE_SECRET_KEY", "bastion123"),
+        object_storage_bucket=os.environ.get("OBJECT_STORAGE_BUCKET", "bastion-payloads"),
     )
 
 

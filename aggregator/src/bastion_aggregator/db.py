@@ -20,7 +20,11 @@ class Database:
 
     async def connect(self) -> None:
         self._pool = await asyncpg.create_pool(
-            config.database_url, min_size=1, max_size=10, init=_init_connection
+            config.database_url,
+            min_size=1,
+            max_size=10,
+            init=_init_connection,
+            command_timeout=config.db_query_timeout_seconds,
         )
 
     async def close(self) -> None:

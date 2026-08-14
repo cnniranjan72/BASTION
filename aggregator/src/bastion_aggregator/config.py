@@ -19,6 +19,9 @@ class Config:
     # dev/CI.
     jwt_public_key_path: str
     kafka_bootstrap_servers: str
+    # U9 (v2 upgrade), UPGRADE_ARCHITECTURE.md §11 — same reasoning as
+    # interceptor/config.py's field of the same name.
+    db_query_timeout_seconds: float
 
 
 def load_config() -> Config:
@@ -33,6 +36,7 @@ def load_config() -> Config:
             "JWT_PUBLIC_KEY_PATH", str(_REPO_ROOT / "infra" / "keys" / "jwt_public.pem")
         ),
         kafka_bootstrap_servers=os.environ.get("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092"),
+        db_query_timeout_seconds=float(os.environ.get("DB_QUERY_TIMEOUT_SECONDS", "30")),
     )
 
 

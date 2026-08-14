@@ -88,7 +88,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
-from . import authorization, circuit_breaker
+from . import authorization, circuit_breaker, object_storage
 from . import limits as limits_engine
 from . import policy as policy_engine
 from .auth import AuthenticatedAgent, authenticate_agent, hash_api_key
@@ -168,6 +168,9 @@ policy_reconciler = PolicyReconciler(interval_seconds=config.policy_reconciliati
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     await db.connect()
     await redis_bus.connect()
+    # U9 (v2 upgrade): idempotent — a no-op if the bucket already exists
+    # (the normal case after the first run, MinIO's volume persists it).
+    await object_storage.ensure_bucket()
     for record in await db.get_active_policies():
         compiled = policy_engine.compile_policy_from_raw(
             record["id"], record["policy_set_id"], record["definition"]

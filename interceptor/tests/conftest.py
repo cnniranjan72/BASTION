@@ -12,6 +12,7 @@ import asyncpg
 import httpx
 import pytest
 import pytest_asyncio
+from bastion_interceptor import object_storage
 from bastion_interceptor.db import db
 from bastion_interceptor.human_auth import hash_password
 from bastion_interceptor.main import app
@@ -63,6 +64,14 @@ async def _redis_bus_connected(_migrated_database: None) -> AsyncIterator[None]:
         yield
     finally:
         await redis_bus.close()
+
+
+@pytest_asyncio.fixture(scope="session", autouse=True)
+async def _object_storage_bucket() -> None:
+    # Same reasoning as _db_pool/_redis_bus_connected above: lifespan
+    # doesn't fire under ASGITransport, so U9's object storage bucket
+    # needs to exist before any test that offloads a large payload runs.
+    await object_storage.ensure_bucket()
 
 
 @pytest_asyncio.fixture

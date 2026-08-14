@@ -65,6 +65,12 @@ jobs:
       APP_DATABASE_URL: postgresql://bastion_app:bastion_app@localhost:5432/bastion
       REDIS_URL: redis://localhost:6379
       KAFKA_BOOTSTRAP_SERVERS: localhost:9092
+      # U9 (v2 upgrade): object storage — see the "Start MinIO" step below
+      # for why this isn't a declarative `services:` entry like the others.
+      OBJECT_STORAGE_ENDPOINT_URL: http://localhost:9010
+      OBJECT_STORAGE_ACCESS_KEY: bastion
+      OBJECT_STORAGE_SECRET_KEY: bastion123
+      OBJECT_STORAGE_BUCKET: bastion-payloads
     steps:
       - uses: actions/checkout@v4
       - name: Install uv
@@ -78,6 +84,23 @@ jobs:
       # --dev alone (root [dependency-groups], ruff/mypy only) does not pull in.
       - run: uv sync --all-packages --all-extras --dev
       - run: uv run python infra/keys/generate_dev_keys.py
+      # U9 (v2 upgrade): MinIO needs a `server /data` command argument to
+      # actually start in server mode — GitHub Actions' declarative
+      # `services:` block (unlike Docker Compose) has no way to override a
+      # container's command, only image/env/ports/options. A plain
+      # `docker run` step is the standard workaround for this exact,
+      # well-known MinIO-on-GitHub-Actions limitation.
+      - name: Start MinIO
+        run: |
+          docker run -d --name minio \
+            -p 9010:9000 -p 9011:9011 \
+            -e MINIO_ROOT_USER=bastion \
+            -e MINIO_ROOT_PASSWORD=bastion123 \
+            minio/minio:latest server /data --console-address :9011
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:9010/minio/health/live && break
+            sleep 1
+          done
       - run: uv run ruff check .
       - run: uv run ruff format --check .
       - run: uv run mypy shared/src interceptor/src aggregator/src sdk-python/bastion demo-agent/demo_agent
