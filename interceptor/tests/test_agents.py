@@ -113,9 +113,7 @@ async def test_agents_are_scoped_to_org(
     org_a_admin = await make_user(role="admin")
     org_a_login = await login_as(org_a_admin)
     async with _http_client() as http:
-        await http.post(
-            "/agents", json={"name": "org-a-only"}, headers=_auth_headers(org_a_login)
-        )
+        await http.post("/agents", json={"name": "org-a-only"}, headers=_auth_headers(org_a_login))
 
     org_b_admin = await make_user(role="admin", org_id=await _other_org())
     org_b_login = await login_as(org_b_admin)

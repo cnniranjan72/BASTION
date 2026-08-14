@@ -57,9 +57,7 @@ async def test_revoked_token_stops_working(
     login = await login_as(user)
 
     async with _http_client() as http:
-        create = await http.post(
-            "/api-tokens", json={"name": "temp"}, headers=_auth_headers(login)
-        )
+        create = await http.post("/api-tokens", json={"name": "temp"}, headers=_auth_headers(login))
         token_id = create.json()["id"]
         raw_token = create.json()["token"]
 
@@ -87,9 +85,7 @@ async def test_cannot_revoke_another_users_token(
 
         # Same org, different user — personal tokens aren't an org-shared
         # resource the way agents/policies are.
-        revoke = await http.delete(
-            f"/api-tokens/{token_id}", headers=_auth_headers(teammate_login)
-        )
+        revoke = await http.delete(f"/api-tokens/{token_id}", headers=_auth_headers(teammate_login))
     assert revoke.status_code == 404
 
 
