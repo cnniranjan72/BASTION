@@ -13,7 +13,7 @@ Each of these must exist as its own file under `docs/adr/` before Phase 9 (v2) i
 - [x] ADR-009: Multi-tenant isolation via Postgres RLS + app-layer scoping
 - [x] ADR-010: Event table partitioning strategy and retention window
 - [x] ADR-011: Object storage for large payloads, threshold and content-addressing
-- [ ] ADR-012: Read replica introduction criteria (benchmark-triggered, not speculative)
+- [x] ADR-012: Read replica introduction criteria (benchmark-triggered, not speculative)
 - [ ] ADR-013: Failure semantics — fail-open vs fail-closed decisions per component (SDK-to-interceptor, Redis-down, approval-timeout)
 - [x] ADR-014: Kafka partitioning key (trace_id vs agent_id) and ordering guarantees
 - [x] ADR-015: Circuit breaker thresholds and scope (per-tool vs per-host)

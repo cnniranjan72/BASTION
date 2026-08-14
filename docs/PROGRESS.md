@@ -781,7 +781,7 @@ Target architecture: `UPGRADE_ARCHITECTURE.md`. Target frontend: `FRONTEND_V2.md
 file before starting (migrations 0001–0006 present, 67 tests passing, live on Render, aggregator
 confirmed still on Postgres LISTEN/NOTIFY per v1 design) — no mismatch found.
 
-**Current phase**: U1–U9 complete, U10 next.
+**Current phase**: U1–U10 complete (U10 as a deferral decision, not infrastructure — see below), U11 next.
 
 ### Phase status
 - **U1 — Explicit state machine: done.** `shared/src/bastion_shared/call_state.py` — `CallState` enum
@@ -1043,7 +1043,17 @@ confirmed still on Postgres LISTEN/NOTIFY per v1 design) — no mismatch found.
   workspace suite at 207 passed after Kafka container reset (an unrelated, already-documented
   environmental flake reproduced once during verification and was confirmed absent on rerun — not a
   U9 regression). ADR-010 and ADR-011 written.
-- U10–U16: not started.
+- **U10 — Read replica: deferred, per the build plan's own instructions (done as a decision, not as
+  infrastructure).** U10's own text requires U13's load test to run FIRST ("if and only if it shows
+  primary saturation... add a read replica... if the numbers don't justify it, write the ADR
+  explaining why not — a legitimate and stronger outcome"). U13 hasn't run yet (comes later in this
+  session's phase order) — flagged as a real, acknowledged ordering tension in the build plan itself
+  (U10 numbered before U13, but content-dependent on it), resolved the way the plan's own text
+  anticipates: ADR-012 records the trigger condition (primary saturation under U13's load tests) and
+  the candidate routing policy (trace/replay/analytics reads only, never writes or strongly-consistent
+  reads like approval resolution) now, with no replica added and no fabricated numbers. Revisit once
+  U13 actually runs.
+- U11–U16: not started.
 
 ### ADR checklist (mirrors `ADR_INDEX.md`)
 - [x] ADR-001: PostgreSQL as source of truth — `docs/adr/ADR-001-...md`.
