@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
 import { api, ApiError } from "../api/client";
 import { useAuthStore } from "../store/auth";
+import { toast } from "../store/toast";
+import { TableSkeleton } from "./TableSkeleton";
 import { TopBar } from "./TopBar";
 import type { Policy } from "../api/types";
 
@@ -69,12 +71,15 @@ export function PoliciesPage() {
     }
     setCreating(true);
     try {
-      await api.createPolicy(name, definition);
+      const created = await api.createPolicy(name, definition);
       setName("");
       setDefinitionText(EXAMPLE_DEFINITION);
+      toast.success(`"${created.name}" v${created.version} created`);
       await load();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Failed to create policy");
+      const message = err instanceof ApiError ? err.message : "Failed to create policy";
+      setError(message);
+      toast.error(message);
     } finally {
       setCreating(false);
     }
@@ -84,10 +89,13 @@ export function PoliciesPage() {
     setError(null);
     setActivating(id);
     try {
-      await api.activatePolicy(id);
+      const activated = await api.activatePolicy(id);
+      toast.success(`"${activated.name}" v${activated.version} is now active`);
       await load();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Failed to activate policy");
+      const message = err instanceof ApiError ? err.message : "Failed to activate policy";
+      setError(message);
+      toast.error(message);
     } finally {
       setActivating(null);
     }
@@ -128,7 +136,7 @@ export function PoliciesPage() {
         )}
 
         {loading ? (
-          <p className="page__empty">Loading…</p>
+          <TableSkeleton />
         ) : sets.size === 0 ? (
           <p className="page__empty">No policies yet.</p>
         ) : (
@@ -136,49 +144,51 @@ export function PoliciesPage() {
             {Array.from(sets.entries()).map(([policySetId, versions]) => (
               <div key={policySetId} className="policy-set">
                 <h2>{versions[0]?.name ?? "(unnamed)"}</h2>
-                <table className="data-table">
-                  <thead>
-                    <tr>
-                      <th>Version</th>
-                      <th>Status</th>
-                      <th>Created</th>
-                      <th>Definition</th>
-                      {canManage(role) && <th />}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {versions.map((v) => (
-                      <tr key={v.id}>
-                        <td>v{v.version}</td>
-                        <td>
-                          {v.active ? (
-                            <span className="badge badge--active">active</span>
-                          ) : (
-                            <span className="badge">inactive</span>
-                          )}
-                        </td>
-                        <td>{new Date(v.created_at).toLocaleString()}</td>
-                        <td>
-                          <pre className="data-table__json">
-                            {JSON.stringify(v.definition, null, 2)}
-                          </pre>
-                        </td>
-                        {canManage(role) && (
+                <div className="table-scroll">
+                  <table className="data-table">
+                    <thead>
+                      <tr>
+                        <th>Version</th>
+                        <th>Status</th>
+                        <th>Created</th>
+                        <th>Definition</th>
+                        {canManage(role) && <th />}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {versions.map((v) => (
+                        <tr key={v.id}>
+                          <td>v{v.version}</td>
                           <td>
-                            {!v.active && (
-                              <button
-                                onClick={() => handleActivate(v.id)}
-                                disabled={activating === v.id}
-                              >
-                                {activating === v.id ? "Activating…" : "Activate"}
-                              </button>
+                            {v.active ? (
+                              <span className="badge badge--active">active</span>
+                            ) : (
+                              <span className="badge">inactive</span>
                             )}
                           </td>
-                        )}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                          <td>{new Date(v.created_at).toLocaleString()}</td>
+                          <td>
+                            <pre className="data-table__json">
+                              {JSON.stringify(v.definition, null, 2)}
+                            </pre>
+                          </td>
+                          {canManage(role) && (
+                            <td>
+                              {!v.active && (
+                                <button
+                                  onClick={() => handleActivate(v.id)}
+                                  disabled={activating === v.id}
+                                >
+                                  {activating === v.id ? "Activating…" : "Activate"}
+                                </button>
+                              )}
+                            </td>
+                          )}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             ))}
           </div>

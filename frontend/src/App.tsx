@@ -5,6 +5,7 @@ import { Dashboard } from "./components/Dashboard";
 import { AgentsPage } from "./components/AgentsPage";
 import { PoliciesPage } from "./components/PoliciesPage";
 import { ApprovalsPage } from "./components/ApprovalsPage";
+import { ToastHost } from "./components/ToastHost";
 import { useAuthStore } from "./store/auth";
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
@@ -16,6 +17,7 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
 export function App() {
   return (
     <BrowserRouter>
+      <ToastHost />
       <Routes>
         <Route path="/login" element={<LoginPage />} />
         <Route path="/signup" element={<SignupPage />} />

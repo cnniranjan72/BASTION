@@ -1,6 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, ApiError } from "../api/client";
 import { useAuthStore } from "../store/auth";
+import { toast } from "../store/toast";
+import { TableSkeleton } from "./TableSkeleton";
 import { TopBar } from "./TopBar";
 import type { ApprovalRequest } from "../api/types";
 
@@ -14,9 +16,12 @@ export function ApprovalsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [resolving, setResolving] = useState<string | null>(null);
+  const loadedOnce = useRef(false);
 
   async function load() {
-    setLoading(true);
+    // Only show the loading state on first mount — a background poll
+    // shouldn't flash the whole list to "Loading…" every 5s.
+    if (!loadedOnce.current) setLoading(true);
     setError(null);
     try {
       setApprovals(await api.listApprovals());
@@ -24,6 +29,7 @@ export function ApprovalsPage() {
       setError(err instanceof ApiError ? err.message : "Failed to load approvals");
     } finally {
       setLoading(false);
+      loadedOnce.current = true;
     }
   }
 
@@ -42,9 +48,12 @@ export function ApprovalsPage() {
     try {
       if (decision === "approve") await api.approve(id);
       else await api.deny(id);
+      toast.success(decision === "approve" ? "Approved" : "Denied");
       await load();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : `Failed to ${decision}`);
+      const message = err instanceof ApiError ? err.message : `Failed to ${decision}`;
+      setError(message);
+      toast.error(message);
     } finally {
       setResolving(null);
     }
@@ -64,47 +73,49 @@ export function ApprovalsPage() {
         {error && <p className="page__error">{error}</p>}
 
         {loading ? (
-          <p className="page__empty">Loading…</p>
+          <TableSkeleton />
         ) : approvals.length === 0 ? (
           <p className="page__empty">No pending approvals.</p>
         ) : (
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>Requested</th>
-                <th>Trace</th>
-                <th>Span</th>
-                {canResolve(role) && <th />}
-              </tr>
-            </thead>
-            <tbody>
-              {approvals.map((a) => (
-                <tr key={a.id}>
-                  <td>{new Date(a.requested_at).toLocaleString()}</td>
-                  <td className="data-table__mono">{a.trace_id}</td>
-                  <td className="data-table__mono">{a.span_id}</td>
-                  {canResolve(role) && (
-                    <td className="data-table__actions">
-                      <button
-                        className="button--approve"
-                        onClick={() => resolve(a.id, "approve")}
-                        disabled={resolving === a.id}
-                      >
-                        Approve
-                      </button>
-                      <button
-                        className="button--deny"
-                        onClick={() => resolve(a.id, "deny")}
-                        disabled={resolving === a.id}
-                      >
-                        Deny
-                      </button>
-                    </td>
-                  )}
+          <div className="table-scroll">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Requested</th>
+                  <th>Trace</th>
+                  <th>Span</th>
+                  {canResolve(role) && <th />}
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {approvals.map((a) => (
+                  <tr key={a.id}>
+                    <td>{new Date(a.requested_at).toLocaleString()}</td>
+                    <td className="data-table__mono">{a.trace_id}</td>
+                    <td className="data-table__mono">{a.span_id}</td>
+                    {canResolve(role) && (
+                      <td className="data-table__actions">
+                        <button
+                          className="button--approve"
+                          onClick={() => resolve(a.id, "approve")}
+                          disabled={resolving === a.id}
+                        >
+                          Approve
+                        </button>
+                        <button
+                          className="button--deny"
+                          onClick={() => resolve(a.id, "deny")}
+                          disabled={resolving === a.id}
+                        >
+                          Deny
+                        </button>
+                      </td>
+                    )}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </div>
     </div>

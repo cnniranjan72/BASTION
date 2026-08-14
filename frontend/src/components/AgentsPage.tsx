@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
 import { api, ApiError } from "../api/client";
 import { useAuthStore } from "../store/auth";
+import { toast } from "../store/toast";
+import { TableSkeleton } from "./TableSkeleton";
 import { TopBar } from "./TopBar";
 import type { Agent, Policy } from "../api/types";
 
@@ -57,9 +59,12 @@ export function AgentsPage() {
       setCopied(false);
       setName("");
       setPolicySetId("");
+      toast.success(`Agent "${created.name}" created`);
       await load();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Failed to create agent");
+      const message = err instanceof ApiError ? err.message : "Failed to create agent";
+      setError(message);
+      toast.error(message);
     } finally {
       setCreating(false);
     }
@@ -69,9 +74,12 @@ export function AgentsPage() {
     setError(null);
     try {
       await api.updateAgentPolicySet(agentId, newPolicySetId || null);
+      toast.success("Policy updated");
       await load();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Failed to update agent");
+      const message = err instanceof ApiError ? err.message : "Failed to update agent";
+      setError(message);
+      toast.error(message);
     }
   }
 
@@ -139,48 +147,50 @@ export function AgentsPage() {
         )}
 
         {loading ? (
-          <p className="page__empty">Loading…</p>
+          <TableSkeleton />
         ) : agents.length === 0 ? (
           <p className="page__empty">
             No agents yet. {canManage(role) && "Create one above to get an API key."}
           </p>
         ) : (
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>Policy</th>
-                <th>Agent ID</th>
-                <th>Created</th>
-                {canManage(role) && <th>Reassign policy</th>}
-              </tr>
-            </thead>
-            <tbody>
-              {agents.map((agent) => (
-                <tr key={agent.id}>
-                  <td>{agent.name}</td>
-                  <td>{policyName(agent.policy_set_id)}</td>
-                  <td className="data-table__mono">{agent.id}</td>
-                  <td>{new Date(agent.created_at).toLocaleString()}</td>
-                  {canManage(role) && (
-                    <td>
-                      <select
-                        value={agent.policy_set_id ?? ""}
-                        onChange={(e) => handleReassign(agent.id, e.target.value)}
-                      >
-                        <option value="">No policy (allow all)</option>
-                        {activePolicySets.map((p) => (
-                          <option key={p.policy_set_id} value={p.policy_set_id}>
-                            {p.name}
-                          </option>
-                        ))}
-                      </select>
-                    </td>
-                  )}
+          <div className="table-scroll">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Policy</th>
+                  <th>Agent ID</th>
+                  <th>Created</th>
+                  {canManage(role) && <th>Reassign policy</th>}
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {agents.map((agent) => (
+                  <tr key={agent.id}>
+                    <td>{agent.name}</td>
+                    <td>{policyName(agent.policy_set_id)}</td>
+                    <td className="data-table__mono">{agent.id}</td>
+                    <td>{new Date(agent.created_at).toLocaleString()}</td>
+                    {canManage(role) && (
+                      <td>
+                        <select
+                          value={agent.policy_set_id ?? ""}
+                          onChange={(e) => handleReassign(agent.id, e.target.value)}
+                        >
+                          <option value="">No policy (allow all)</option>
+                          {activePolicySets.map((p) => (
+                            <option key={p.policy_set_id} value={p.policy_set_id}>
+                              {p.name}
+                            </option>
+                          ))}
+                        </select>
+                      </td>
+                    )}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </div>
     </div>

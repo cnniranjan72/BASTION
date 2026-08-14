@@ -3,7 +3,7 @@
 ## Status: build complete, post-launch additions in progress
 All of `docs/BUILD_PLAN.md` (Phases 0-9) plus the final documentation set are done. Now working through
 user-requested follow-ups: signup/registration (done), Neon Postgres connection (done), agents/policies/
-approvals management UI (done), Render deployment (next), UI visual polish.
+approvals management UI (done), visual design pass (done), Render deployment (next).
 
 ## Log
 - [2026-08-14] Project specced out (PRD, ARCHITECTURE, DATA_MODEL, AUTH, API_SPEC, BUILD_PLAN written). No code yet.
@@ -541,9 +541,45 @@ approvals management UI (done), Render deployment (next), UI visual polish.
     workspace suite passes (49 prior + 6 new agent tests), `ruff`/`mypy --strict` and frontend
     `typecheck`/`lint` all clean.
 
+- [2026-08-14] Visual design pass (post-launch, user-requested — "production level animistic real live
+  elements responsive sections character and all"):
+  - **Typography/identity**: Space Grotesk (display/headings/brand) + Inter (body) + JetBrains Mono
+    (code/IDs), loaded via Google Fonts in `index.html`. Expanded color tokens (added `--accent-2`
+    violet, `--success`/`--warning` as named tokens instead of ad hoc hex, `--bg-elevated`,
+    `--border-bright`), a `--shadow-glow` for emphasis states, and a shared `--ease`/`--duration` motion
+    system instead of one-off transition values scattered per rule.
+  - **Motion**: entrance animations (fade/slide/scale) on route changes, list/table rows (staggered by
+    `nth-child`), cards, and error banners; a pulsing ring on the "Live" status dot; a shimmer-based
+    skeleton loader (`TableSkeleton.tsx`) replacing bare "Loading…" text across Agents/Policies/
+    Approvals. All animation respects `prefers-reduced-motion`.
+  - **Toast notification system** (`store/toast.ts` + `ToastHost.tsx`, zustand — same pattern as the
+    existing auth/graph stores): success/error/info feedback for every mutating action (create agent,
+    reassign policy, create/activate policy, approve/deny, sign out), slide-in from the top-right,
+    auto-dismiss. Previously these actions only had a plain inline error string with no positive
+    confirmation at all.
+  - **Responsive**: dashboard's 3-column grid collapses to a stacked layout under 960px; nav becomes a
+    hamburger-triggered dropdown under 720px, with the user/org/sign-out block moving into it; forms and
+    data tables reflow to full-width/horizontal-scroll. Verified without true window-resize support in
+    this browser automation environment (window resize silently no-ops here) by confirming the compiled
+    stylesheet actually contains both media rules with the expected rule counts, then temporarily
+    duplicating each media rule's body unconditionally to visually inspect the intended mobile layout —
+    an indirect but real verification, not just "the CSS looks right on paper."
+  - **Real bug found and fixed**: `.topbar__user--mobile { display: none }` was declared *before*
+    `.topbar__user { display: flex }` in source order — since both are single-class selectors (identical
+    specificity) and the element carries both classes, plain CSS cascade order meant the later rule won,
+    so the mobile-only user block rendered at *every* width, duplicating the org/role/sign-out block
+    next to the desktop one. Classic ordering bug, invisible in isolation, only showed up once both rules
+    existed on the same element — found in the very first live screenshot after the CSS pass, fixed by
+    reordering (declare the override after the rule it overrides), not by adding specificity as a patch.
+  - Re-verified the 3D live graph still renders and updates correctly after the full CSS rewrite (ran a
+    real `/intercept` call against a fresh agent, watched the node appear live) — the part of this app
+    most expensive to re-break, checked explicitly rather than assumed safe.
+  - Frontend `typecheck`/`lint` clean; full 55-test backend suite reconfirmed passing (no backend files
+    touched this pass, checked anyway).
+
 ## Next up
 - Render deployment — next, now that the product itself (not just the backend) is actually usable
-  end-to-end. UI visual polish (the original, narrower ask) still pending after that.
+  end-to-end and looks the part.
 - If resumed after that: worth resetting/isolating the dev Postgres before anything latency-sensitive
   (thousands of accumulated `test-org-*` rows from every phase's test runs share the same dev DB) and
   building the CI-gated version of the API drift check `docs/api/DRIFT.md` describes but doesn't
