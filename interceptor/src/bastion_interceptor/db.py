@@ -388,6 +388,55 @@ class Database:
             await self.pool.fetchrow("SELECT * FROM users WHERE id = $1", user_id),
         )
 
+    async def list_users_for_org(self, org_id: UUID) -> list[asyncpg.Record]:
+        return cast(
+            list[asyncpg.Record],
+            await self.pool.fetch(
+                "SELECT id, org_id, email, role, created_at FROM users "
+                "WHERE org_id = $1 ORDER BY created_at ASC",
+                org_id,
+            ),
+        )
+
+    async def create_user(
+        self, *, org_id: UUID, email: str, password_hash: str, role: str
+    ) -> asyncpg.Record:
+        record = await self.pool.fetchrow(
+            """
+            INSERT INTO users (org_id, email, password_hash, role)
+            VALUES ($1, $2, $3, $4)
+            RETURNING id, org_id, email, role, created_at
+            """,
+            org_id,
+            email,
+            password_hash,
+            role,
+        )
+        assert record is not None
+        return record
+
+    async def count_owners_for_org(self, org_id: UUID) -> int:
+        count = await self.pool.fetchval(
+            "SELECT count(*) FROM users WHERE org_id = $1 AND role = 'owner'", org_id
+        )
+        return cast(int, count)
+
+    async def update_user_role(
+        self, user_id: UUID, org_id: UUID, role: str
+    ) -> asyncpg.Record | None:
+        # Same check-before-mutate discipline as activate_policy/update_agent_policy_set:
+        # org_id is in the WHERE, not filtered from the response afterward.
+        return await self.pool.fetchrow(
+            """
+            UPDATE users SET role = $1
+            WHERE id = $2 AND org_id = $3
+            RETURNING id, org_id, email, role, created_at
+            """,
+            role,
+            user_id,
+            org_id,
+        )
+
     async def insert_refresh_token(
         self, *, user_id: UUID, token_hash: str, family_id: UUID, expires_at: Any
     ) -> asyncpg.Record:

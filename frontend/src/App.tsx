@@ -1,10 +1,12 @@
 import { Navigate, Route, BrowserRouter, Routes } from "react-router-dom";
 import { LoginPage } from "./components/LoginPage";
 import { SignupPage } from "./components/SignupPage";
+import { OverviewPage } from "./components/OverviewPage";
 import { Dashboard } from "./components/Dashboard";
 import { AgentsPage } from "./components/AgentsPage";
 import { PoliciesPage } from "./components/PoliciesPage";
 import { ApprovalsPage } from "./components/ApprovalsPage";
+import { TeamPage } from "./components/TeamPage";
 import { ToastHost } from "./components/ToastHost";
 import { useAuthStore } from "./store/auth";
 
@@ -23,6 +25,14 @@ export function App() {
         <Route path="/signup" element={<SignupPage />} />
         <Route
           path="/"
+          element={
+            <RequireAuth>
+              <OverviewPage />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/graph"
           element={
             <RequireAuth>
               <Dashboard />
@@ -50,6 +60,14 @@ export function App() {
           element={
             <RequireAuth>
               <ApprovalsPage />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/team"
+          element={
+            <RequireAuth>
+              <TeamPage />
             </RequireAuth>
           }
         />

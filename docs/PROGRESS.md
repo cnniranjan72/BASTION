@@ -577,6 +577,37 @@ approvals management UI (done), visual design pass (done), Render deployment (ne
   - Frontend `typecheck`/`lint` clean; full 55-test backend suite reconfirmed passing (no backend files
     touched this pass, checked anyway).
 
+- [2026-08-14] Team/RBAC management + Overview home page (post-launch, user-requested — "implement
+  RBAC use the best in stack add more components ... think like a ... product innovation tech lead"):
+  - **The real gap**: AUTH.md's four roles were fully enforced everywhere since Phase 5, but had zero
+    management surface — exactly one user per org (the signup owner), no way to see teammates, no way
+    to invite anyone, no way to change a role after the fact. RBAC as an authorization mechanism without
+    any way to actually administer it isn't really RBAC as a feature, just a fixed permission check.
+  - **Backend**: `GET /users`, `POST /users` (provisioning — an owner/admin directly creates a
+    teammate's account with a role, returns a one-time `temporary_password`; **not** an email invite,
+    since no email-sending infrastructure exists anywhere in this project and faking one would violate
+    CLAUDE.md rule #3), `PATCH /users/{id}/role` (blocks demoting the organization's last owner with
+    409 `LAST_OWNER` — a self-inflicted-lockout guard, not a blanket "can't demote" rule; promoting a
+    second owner first and demoting the original still works, tested explicitly). 6 new tests
+    (`interceptor/tests/test_users.py`), including one that proves the returned temporary password
+    actually logs in, same "prove the credential works, not just that the create call succeeded"
+    standard as Phase-whatever's agent-key test.
+  - **Frontend**: `TeamPage.tsx` (list members, provision teammate with the same one-time-reveal pattern
+    as an agent's API key, change role per row) and `OverviewPage.tsx`, which becomes the new "/"
+    landing page — agent/active-policy/pending-approval/blocked-call/total-cost stat cards (each
+    clickable through to its own page) plus a recent-traces list, composed entirely from existing list
+    endpoints (`listAgents`/`listPolicies`/`listApprovals`/`listTraces`) rather than new backend
+    aggregation surface. A brand-new org (zero agents) sees an explicit "create an agent → write a
+    policy → watch it live" checklist instead of stat cards showing all zeroes. The live graph moved to
+    `/graph`; nav is now Overview/Graph/Agents/Policies/Approvals/Team.
+  - **Verified live, not just written**: provisioned a real teammate through the UI, confirmed the
+    revealed temporary password and the correct role both showed up in the member list; attempted to
+    demote the sole owner through the actual role-change `<select>` and confirmed the UI reverted the
+    dropdown after the server's 409 (not just that the request failed silently); re-checked the 6-item
+    mobile nav dropdown renders correctly at the new tab count.
+  - `docs/API_SPEC.md` and the generated OpenAPI snapshot updated in the same change. Full 61-test
+    backend suite passes (55 prior + 6 new), frontend `typecheck`/`lint` clean.
+
 ## Next up
 - Render deployment — next, now that the product itself (not just the backend) is actually usable
   end-to-end and looks the part.

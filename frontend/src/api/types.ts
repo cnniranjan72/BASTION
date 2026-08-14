@@ -16,6 +16,18 @@ export interface TokenPairResponse {
   role: UserRole;
 }
 
+export interface TeamMember {
+  id: string;
+  org_id: string;
+  email: string;
+  role: UserRole;
+  created_at: string;
+}
+
+export interface CreateUserResponse extends TeamMember {
+  temporary_password: string;
+}
+
 export type NodeStatus =
   "pending" | "allowed" | "blocked" | "pending_approval" | "completed" | "failed";
 

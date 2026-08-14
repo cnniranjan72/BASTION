@@ -43,3 +43,19 @@ on or correct earlier ones — noted where that happens).
   app, not just written and assumed correct: created a genuinely new org via signup, created an agent
   through the UI and confirmed its revealed key actually authenticates, created and activated a policy,
   and drove a real `require_approval` call through to a UI-clicked Approve.
+- **Team provisioning, not email invites.** `POST /users` (post-launch, user-requested — "implement
+  RBAC") lets an owner/admin directly create a teammate's account with a role and a one-time-revealed
+  temporary password, rather than sending an invite email. No email-sending infrastructure exists
+  anywhere in this project (never specced, never built) — building a fake "invite sent" flow that
+  doesn't actually deliver anything would be exactly the kind of silent mock CLAUDE.md rule #3
+  prohibits. Demoting the organization's last owner is blocked (409 `LAST_OWNER`) because it's a
+  self-inflicted lockout — nobody left who could activate a policy, provision anyone, or undo the
+  mistake — not blocked as "demotion" generally; promoting someone else to owner first, then demoting
+  the original, still works.
+- **Overview became the new "/" landing page, Graph moved to "/graph".** The product previously opened
+  straight into the 3D live graph, which is compelling once you have an agent running but is a dead end
+  for literally everyone's first session (zero agents, zero traces, nothing to look at). An at-a-glance
+  home page — agent/policy/approval counts, recent traces, an explicit "create an agent → write a
+  policy → watch it live" checklist when the org is empty — replaces that with something that actually
+  orients a new user, composed entirely from existing list endpoints rather than new backend
+  aggregation surface.

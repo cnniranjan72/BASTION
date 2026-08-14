@@ -6,10 +6,12 @@ import { toast } from "../store/toast";
 import type { ConnectionStatus } from "../hooks/useLiveGraph";
 
 const NAV_LINKS = [
-  { to: "/", label: "Graph", end: true },
+  { to: "/", label: "Overview", end: true },
+  { to: "/graph", label: "Graph" },
   { to: "/agents", label: "Agents" },
   { to: "/policies", label: "Policies" },
   { to: "/approvals", label: "Approvals" },
+  { to: "/team", label: "Team" },
 ];
 
 const STATUS_LABEL: Record<ConnectionStatus, string> = {

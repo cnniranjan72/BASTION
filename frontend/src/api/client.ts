@@ -3,12 +3,15 @@ import type {
   Agent,
   ApprovalRequest,
   CreateAgentResponse,
+  CreateUserResponse,
   ErrorResponse,
   Policy,
   RawEvent,
+  TeamMember,
   TokenPairResponse,
   TraceGraph,
   TraceSummary,
+  UserRole,
 } from "./types";
 
 // vite.config.ts proxies these to the interceptor (4001) / aggregator
@@ -110,6 +113,18 @@ export const api = {
     request<{ status: string }>(INTERCEPTOR_BASE, "/auth/logout", {
       method: "POST",
       body: JSON.stringify({ refresh_token }),
+    }),
+
+  listUsers: () => request<TeamMember[]>(INTERCEPTOR_BASE, "/users"),
+  createUser: (email: string, role: UserRole) =>
+    request<CreateUserResponse>(INTERCEPTOR_BASE, "/users", {
+      method: "POST",
+      body: JSON.stringify({ email, role }),
+    }),
+  updateUserRole: (userId: string, role: UserRole) =>
+    request<TeamMember>(INTERCEPTOR_BASE, `/users/${userId}/role`, {
+      method: "PATCH",
+      body: JSON.stringify({ role }),
     }),
 
   listAgents: () => request<Agent[]>(INTERCEPTOR_BASE, "/agents"),

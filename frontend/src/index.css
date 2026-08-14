@@ -913,6 +913,93 @@ a {
   background: rgba(239, 68, 68, 0.15);
 }
 
+/* ---------- Overview ---------- */
+.page--wide {
+  max-width: 1300px;
+}
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 0.9rem;
+  margin-bottom: 2rem;
+}
+.stat-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  padding: 1.1rem 1.2rem;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  text-decoration: none;
+  color: var(--text);
+  transition:
+    border-color var(--duration-fast) var(--ease),
+    transform var(--duration-fast) var(--ease),
+    background var(--duration-fast) var(--ease);
+  animation: slide-up var(--duration) var(--ease) backwards;
+}
+.stat-card:hover {
+  border-color: var(--border-bright);
+  background: var(--bg-panel-raised);
+  transform: translateY(-2px);
+}
+.stat-card__value {
+  font-family: var(--font-display);
+  font-size: 1.8rem;
+  font-weight: 600;
+}
+.stat-card__label {
+  font-size: 0.78rem;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.stat-card--warning .stat-card__value {
+  color: var(--warning);
+}
+.stat-card--danger .stat-card__value {
+  color: var(--danger);
+}
+
+.onboarding {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 1.5rem 1.75rem;
+  margin-bottom: 1.5rem;
+  animation: slide-up var(--duration) var(--ease);
+}
+.onboarding h2 {
+  margin: 0 0 0.9rem;
+  font-size: 1.1rem;
+}
+.onboarding__steps {
+  margin: 0;
+  padding-left: 1.2rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  font-size: 0.9rem;
+  color: var(--text-dim);
+  line-height: 1.5;
+}
+.onboarding__steps a {
+  font-weight: 600;
+}
+
+.overview-recent h2 {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-dim);
+  margin: 0 0 0.8rem;
+}
+.overview-recent .trace-list__item {
+  border-left-width: 3px;
+  padding: 0.65rem 0.9rem;
+}
+
 /* ---------- Skeleton loaders ---------- */
 .skeleton {
   border-radius: var(--radius-sm);

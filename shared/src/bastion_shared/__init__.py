@@ -45,9 +45,14 @@ from .realtime import (
     NodeUpdatedMessage,
 )
 from .spans import CompleteSpanRequest, CompleteSpanResponse
+from .users_api import CreateUserRequest, CreateUserResponse, UpdateUserRoleRequest, UserResponse
 
 __all__ = [
     "AgentResponse",
+    "CreateUserRequest",
+    "CreateUserResponse",
+    "UpdateUserRoleRequest",
+    "UserResponse",
     "CreateAgentRequest",
     "CreateAgentResponse",
     "UpdateAgentRequest",

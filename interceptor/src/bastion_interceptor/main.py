@@ -53,6 +53,8 @@ from bastion_shared import (
     CreateAgentRequest,
     CreateAgentResponse,
     CreatePolicyRequest,
+    CreateUserRequest,
+    CreateUserResponse,
     EventType,
     InterceptAllowedResponse,
     InterceptBlockedResponse,
@@ -66,6 +68,8 @@ from bastion_shared import (
     SignupRequest,
     TokenPairResponse,
     UpdateAgentRequest,
+    UpdateUserRoleRequest,
+    UserResponse,
     UserRole,
     encode_access_token,
 )
@@ -679,6 +683,98 @@ async def update_agent(
             },
         )
     return _agent_response(record)
+
+
+def _user_response(record: Any) -> UserResponse:
+    return UserResponse(
+        id=record["id"],
+        org_id=record["org_id"],
+        email=record["email"],
+        role=record["role"],
+        created_at=record["created_at"],
+    )
+
+
+@app.get("/users")
+async def list_users(user: AuthenticatedUser = require_any_role) -> list[UserResponse]:
+    records = await db.list_users_for_org(user.org_id)
+    return [_user_response(r) for r in records]
+
+
+@app.post("/users", status_code=201)
+async def create_user(
+    body: CreateUserRequest,
+    request: Request,
+    user: AuthenticatedUser = require_admin,
+) -> CreateUserResponse:
+    # Provisioning, not an email invite — no email-sending infrastructure
+    # exists in this project (see users_api.py's module docstring). The
+    # temporary password is shown exactly once, same one-time-reveal
+    # pattern as an agent's API key.
+    temporary_password = secrets.token_urlsafe(12)
+    try:
+        record = await db.create_user(
+            org_id=user.org_id,
+            email=body.email,
+            password_hash=hash_password(temporary_password),
+            role=body.role,
+        )
+    except asyncpg.UniqueViolationError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": {
+                    "code": "EMAIL_ALREADY_REGISTERED",
+                    "message": "an account with this email already exists",
+                    "request_id": request.state.request_id,
+                }
+            },
+        ) from exc
+    log.info("teammate provisioned", user_id=str(record["id"]), org_id=str(user.org_id))
+    return CreateUserResponse(
+        **_user_response(record).model_dump(), temporary_password=temporary_password
+    )
+
+
+@app.patch("/users/{user_id}/role")
+async def update_user_role(
+    user_id: UUID,
+    body: UpdateUserRoleRequest,
+    request: Request,
+    user: AuthenticatedUser = require_admin,
+) -> UserResponse:
+    target = await db.get_user_by_id(user_id)
+    if target is None or target["org_id"] != user.org_id:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": {
+                    "code": "USER_NOT_FOUND",
+                    "message": f"no user {user_id}",
+                    "request_id": request.state.request_id,
+                }
+            },
+        )
+    # An org that hits zero owners can never activate a policy, provision a
+    # teammate, or promote anyone back to owner again — a self-inflicted
+    # lockout, not just a permissions edge case. Block the specific demotion
+    # that would cause it, not demotion in general.
+    if target["role"] == "owner" and body.role != "owner":
+        owner_count = await db.count_owners_for_org(user.org_id)
+        if owner_count <= 1:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": {
+                        "code": "LAST_OWNER",
+                        "message": "cannot demote the organization's last owner",
+                        "request_id": request.state.request_id,
+                    }
+                },
+            )
+    record = await db.update_user_role(user_id, user.org_id, body.role)
+    assert record is not None
+    return _user_response(record)
 
 
 def _approval_response(record: Any) -> ApprovalRequestResponse:

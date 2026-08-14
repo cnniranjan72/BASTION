@@ -138,6 +138,20 @@ and "exists but isn't yours" look identical to the caller.
 Prior to this, users were inserted directly via SQL in dev/tests (`docs/PROGRESS.md`) — that path still
 exists for tests and seed scripts, but real signup no longer requires it.
 
+### Team (RBAC management)
+- `GET /users` (any role) — every user in the caller's org, ordered by join date. Never includes a
+  password or any credential.
+- `POST /users` (role: `owner`/`admin`) — body: `{ "email": "...", "role": "owner"|"admin"|"approver"|"viewer" }`
+  → `UserResponse` plus a one-time `temporary_password` field. This is **provisioning, not an email
+  invite** — no email-sending infrastructure exists anywhere in this project, and the temp password is
+  shared with the new teammate out of band by whoever created the account. 409
+  `EMAIL_ALREADY_REGISTERED` on a duplicate email.
+- `PATCH /users/{id}/role` (role: `owner`/`admin`) — body: `{ "role": "..." }`. 404 `USER_NOT_FOUND` for
+  a nonexistent or cross-org target (same "doesn't exist" vs. "isn't yours" non-disclosure as everywhere
+  else). 409 `LAST_OWNER` if the change would demote the organization's only remaining owner — that
+  specific transition is blocked because it's a self-inflicted lockout (nobody left who can activate a
+  policy, provision anyone, or promote someone back to owner), not blocked as "demotion" in general.
+
 ### Agents & Policies
 - `POST /agents` (role: `owner`/`admin`) — body: `{ "name": "...", "policy_set_id": "uuid | null" }`
   → `AgentResponse` plus a one-time `api_key` field (raw key, `bastion_` prefix; only the SHA-256 hash
