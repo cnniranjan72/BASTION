@@ -608,6 +608,24 @@ approvals management UI (done), visual design pass (done), Render deployment (ne
   - `docs/API_SPEC.md` and the generated OpenAPI snapshot updated in the same change. Full 61-test
     backend suite passes (55 prior + 6 new), frontend `typecheck`/`lint` clean.
 
+- [2026-08-14] README: architecture/flow diagrams + product-surface overview (post-launch, user-
+  requested — "update the readme with more diagrams"):
+  - Added two new mermaid diagrams to README.md's Architecture section: a `sequenceDiagram` walking the
+    three real branches of the `/intercept` decision (allowed/blocked/require_approval) with exactly
+    which event each writes and where `execute()` actually sits in the sequence, and a `stateDiagram-v2`
+    for the approval lifecycle (`pending` → `approved`/`denied`/`timed_out`, the last one being the
+    fail-closed TTL path). Both verified by publishing to a scratch Artifact and screenshotting the
+    rendered output before committing — not just trusted as "syntax looks right on paper," same
+    discipline as every other user-facing surface this session.
+  - Added an `### RBAC` permission-matrix table (4 roles × 5 action rows) — grepped the actual
+    `require_admin`/`require_approver`/`require_any_role` usage in `interceptor/main.py` per endpoint
+    before writing it, rather than writing down the intended/assumed matrix.
+  - Added a `## Product surface` section listing all six pages (Overview/Graph/Agents/Policies/
+    Approvals/Team) with a one-line description each, so the README's own description of the product
+    matches what a new user actually lands on now, not just the 3D-graph-only story from before the
+    Team/RBAC/Overview work above.
+  - Docs-only change, no code touched; no test/lint run required.
+
 ## Next up
 - Render deployment — next, now that the product itself (not just the backend) is actually usable
   end-to-end and looks the part.

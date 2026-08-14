@@ -87,6 +87,96 @@ flowchart LR
 Full design detail and every non-obvious call made along the way: `docs/ARCHITECTURE.md`,
 `docs/decisions.md`.
 
+### The `/intercept` decision, in sequence
+
+The three branches every call actually takes — allowed, blocked, or routed to a human — and where each
+one writes to the append-only event log:
+
+```mermaid
+sequenceDiagram
+    participant Agent
+    participant SDK as BASTION SDK
+    participant Interceptor
+    participant Cache as PolicyCache (in-memory)
+    participant DB as Postgres (events)
+
+    Agent->>SDK: call("payments.transfer", args)
+    SDK->>Interceptor: POST /intercept
+    Interceptor->>DB: write CallAttempted
+    Interceptor->>Cache: evaluate policy (no DB round trip)
+
+    alt allowed
+        Interceptor->>DB: write CallAllowed
+        Interceptor-->>SDK: decision: allowed
+        SDK->>SDK: execute() — the real call
+        SDK->>Interceptor: POST /spans/{id}/complete
+        Interceptor->>DB: write CallCompleted
+    else blocked
+        Interceptor->>DB: write CallBlocked
+        Interceptor-->>SDK: decision: blocked
+        SDK--xAgent: raise BastionBlockedError (execute() never runs)
+    else require_approval
+        Interceptor->>DB: write CallPendingApproval
+        Interceptor-->>SDK: decision: pending_approval
+        SDK->>Interceptor: GET /approvals/{id} (long-poll, loops)
+        Note over Interceptor,DB: a human approves or denies
+        Interceptor-->>SDK: resolved: approved | denied
+    end
+```
+
+The `blocked` branch is the actual mechanism, not a suggestion — `execute()` (the real downstream call)
+is only ever invoked on `allowed`, so a call the policy engine rejects never reaches a real payments API,
+database, or anything else, regardless of what the agent's own logic decided to do.
+
+### Approval lifecycle
+
+`require_approval` calls pause the agent, not the interceptor (`docs/ARCHITECTURE.md` §13) — `/intercept`
+itself never blocks for a human-timescale decision:
+
+```mermaid
+stateDiagram-v2
+    [*] --> pending: policy says require_approval
+    pending --> approved: POST /approvals/{id}/approve
+    pending --> denied: POST /approvals/{id}/deny
+    pending --> timed_out: APPROVAL_TTL_SECONDS elapses, unresolved
+    approved --> [*]: SDK's execute() finally runs
+    denied --> [*]: BastionBlockedError
+    timed_out --> [*]: BastionBlockedError (fails closed)
+```
+
+### RBAC
+
+Four roles, enforced on every dashboard endpoint — not just checked in the UI, which only hides
+buttons a request would be rejected for anyway:
+
+| Action | Owner | Admin | Approver | Viewer |
+|---|:---:|:---:|:---:|:---:|
+| View graph, traces, agents, policies, approvals, team | ✅ | ✅ | ✅ | ✅ |
+| Create/manage agents, create/activate policies | ✅ | ✅ | ❌ | ❌ |
+| Approve or deny a pending call | ✅ | ✅ | ✅ | ❌ |
+| Provision teammates, change roles | ✅ | ✅ | ❌ | ❌ |
+| Demote the organization's last owner | ❌ | ❌ | ❌ | ❌ |
+
+That last row isn't a role restriction — it's blocked for *everyone*, owner included, because it's a
+self-inflicted lockout (nobody left who could activate a policy, provision anyone, or undo the mistake).
+Promoting a second owner first, then demoting the original, still works.
+
+## Product surface
+
+Six pages behind one nav, each backed by real endpoints — not a mockup of a bigger product:
+
+- **Overview** (`/`) — agent/policy/approval/cost counts at a glance, recent traces, and an explicit
+  "create an agent → write a policy → watch it live" checklist for a brand-new org instead of a wall of
+  zeroes.
+- **Graph** (`/graph`) — the live/replayed 3D execution graph and 2D inspector described above.
+- **Agents** (`/agents`) — create an agent, see its API key exactly once, assign or reassign a policy.
+- **Policies** (`/policies`) — version history per policy, activate a version (hot-reloads every running
+  interceptor, no restart).
+- **Approvals** (`/approvals`) — the inbox for calls routed to a human, with Approve/Deny.
+- **Team** (`/team`) — see everyone in your org, provision a teammate with a role (a one-time temporary
+  password, not an email invite — no email infrastructure exists in this project, and pretending
+  otherwise would be worse than not having the feature), change anyone's role.
+
 ## Repo layout
 
 - `interceptor/` — the latency-critical hot path (`POST /intercept`), Python + FastAPI
