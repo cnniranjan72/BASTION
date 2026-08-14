@@ -781,7 +781,7 @@ Target architecture: `UPGRADE_ARCHITECTURE.md`. Target frontend: `FRONTEND_V2.md
 file before starting (migrations 0001–0006 present, 67 tests passing, live on Render, aggregator
 confirmed still on Postgres LISTEN/NOTIFY per v1 design) — no mismatch found.
 
-**Current phase**: U1 and U2 complete, U3 next.
+**Current phase**: U1–U3 complete, U4 next.
 
 ### Phase status
 - **U1 — Explicit state machine: done.** `shared/src/bastion_shared/call_state.py` — `CallState` enum
@@ -807,18 +807,93 @@ confirmed still on Postgres LISTEN/NOTIFY per v1 design) — no mismatch found.
   exactly one `CallAttempted` event, all 5 responses share one `span_id` — passed on first attempt.
   Also covers sequential retry, independent keys staying independent, and no-key preserving v1
   behavior exactly. ADR-004 and ADR-005 written. Full workspace suite: 166 passed (was 162; +4 new).
-- U3–U16: not started.
+- **U3 — Transactional outbox + Kafka: done.** Real infrastructure, not a mock: `apache/kafka:3.7.0`
+  single-node KRaft broker added to `infra/docker/docker-compose.yml` and to CI's `python` job as a
+  service container. `outbox_events` table (migrations `0008`/`0009`) written in the same Postgres
+  transaction as every `events` row (`interceptor/db.py`'s `insert_event`); a separate
+  `OutboxPublisher` process (`outbox_publisher.py`) polls unpublished rows and ships them to the
+  `tool-events` topic, partitioned by `trace_id`, marking a batch published only once every message
+  in it is confirmed sent. The aggregator's live-tracking trigger moved from Postgres LISTEN/NOTIFY
+  to a Kafka consumer group (`kafka_consumer.py`, `group_id="aggregator"`); `analytics`/`security` are
+  real (if business-logic-stubbed) independent consumer groups proving the fan-out pattern
+  (`stub_consumers.py`). All three required milestone tests pass:
+  `interceptor/tests/test_outbox_resumability.py` (kill the publisher mid-batch, restart, no event
+  lost or missing from Kafka), `aggregator/tests/test_kafka_resumability.py`'s
+  `test_aggregator_consumer_resumes_from_committed_offset_after_restart` (kill the aggregator's
+  consumer, restart under the same group_id, it resumes from the committed offset — not a replay —
+  and rebuilds a `trace_summaries` row identical to a direct fold of Postgres) and
+  `test_fresh_analytics_consumer_replays_full_history_from_beginning` (a brand-new group_id with no
+  prior offset replays the entire topic and sees history written before it ever connected). ADR-001,
+  002, 003, 014 written.
+
+  **Real bugs found and fixed during U3** (not silently retried past — see below):
+  1. `outbox_events` was missing `parent_span_id` on first migration; added via a follow-up migration
+     (`0009`) rather than editing the already-applied `0008`.
+  2. The aggregator's per-notification WS broadcast (`_handle_notification`) originally re-folded the
+     *whole* trace and broadcast whatever the current overall status happened to be — correct under
+     Postgres LISTEN/NOTIFY's near-zero latency, but under Kafka's real (if still small) delivery
+     latency this silently dropped intermediate statuses when two events landed in Postgres before the
+     first notification was processed (caught by
+     `test_two_viewers_see_identical_live_updates_with_no_polling` failing with
+     `assert 'completed' == 'allowed'`). Fixed by deriving the broadcast from each event's own
+     type+payload instead of a fresh fold; trace-terminal detection and `trace_summaries` persistence
+     correctly kept the fresh-fold behavior, since those two use cases actually want current overall
+     state.
+  3. A teardown race (`asyncpg.exceptions.InterfaceError: pool is closing`) surfaced only when running
+     the *full* workspace suite together: the new long-running `OutboxPublisher.run_forever()`
+     background task (kept alive for the aggregator test session) raced against demo-agent's own
+     separate session-scoped fixture closing the same shared `bastion_interceptor.db.db` singleton
+     pool — pytest session-scoped fixtures from different conftest.py files all stay alive until the
+     end of the *whole* session, not per-file. Fixed by having `run_forever()` catch
+     `asyncpg.exceptions.InterfaceError` and shut down cleanly — legitimate graceful-shutdown behavior
+     in production too, not just a test workaround.
+
+  **Environment-only issue, not a code bug**: repeated full-suite runs against the same persistent
+  local Kafka broker got progressively slower (57s → 125s → 85s → a 4-minute timeout) from
+  accumulating consumer-group offset/topic state across separate `pytest` invocations. Confirmed by
+  recreating the Kafka container and watching runtime return to baseline. CI gets a fresh broker per
+  run, so this doesn't apply there — noted here only so a future session doesn't mistake it for a
+  regression.
+
+  **Open, not fully resolved**: `interceptor/tests/test_approval_flow.py::test_approval_flow_pauses_and_resumes_on_approve`
+  failed intermittently (2 of ~6 full-suite runs) during U3 development, always passed in isolation
+  and in later consecutive full-suite runs after the Kafka container was recreated. Never caught its
+  traceback despite repeated attempts. Likely transient local resource contention, not a deterministic
+  logic bug, but recorded honestly as unconfirmed rather than claimed fixed.
+
+  **Second open item, found while confirming the full suite before committing U3**:
+  `aggregator/tests/test_live_ws.py` errored (not failed — during fixture setup) on 2 of 2
+  consecutive full-suite runs, each time a raw `ConnectionResetError: [WinError 64] The specified
+  network name is no longer available` from asyncpg, and each time on a *different* test within that
+  file (`test_two_viewers_see_identical_live_updates_with_no_polling`, then
+  `test_missing_token_closes_connection`) — consistent with genuine resource contention rather than
+  one specific test's bug. `test_live_ws.py` passed cleanly in isolation (4/4) both times it was
+  tried. WinError 64 is a Windows-specific transient TCP reset; U3 adds a session-long background
+  outbox publisher and Kafka consumer group on top of the existing per-fixture raw
+  `asyncpg.connect()`/`close()` pattern in `conftest.py` (`test_org`/`test_agent`/etc.), so the
+  full-suite run now holds meaningfully more concurrent sockets/tasks open than pre-U3 — plausible
+  local Windows ephemeral-port/TIME_WAIT pressure, not confirmed as a code defect. Not chased further
+  this session: doesn't reproduce in isolation, and CI runs fresh Linux containers per run rather than
+  this developer's persistent local Windows/Docker Desktop setup. Flagged here per the same honesty
+  standard rather than silently ignored; worth watching if it starts appearing in CI too.
+- U4–U16: not started.
 
 ### ADR checklist (mirrors `ADR_INDEX.md`)
+- [x] ADR-001: PostgreSQL as source of truth — `docs/adr/ADR-001-...md`.
+- [x] ADR-002: Kafka for event distribution (not source of truth) — `docs/adr/ADR-002-...md`.
+- [x] ADR-003: transactional outbox pattern — `docs/adr/ADR-003-...md`.
 - [x] ADR-004: at-least-once delivery + idempotent processing — `docs/adr/ADR-004-...md`.
 - [x] ADR-005: idempotency key design and enforcement — `docs/adr/ADR-005-...md`.
-- [ ] ADR-001, 002, 003, 006–016: not yet written (scheduled for the phases that produce them per
-  `UPGRADE_BUILD_PLAN.md` — e.g. ADR-001/002/003/014 land with U3).
+- [x] ADR-014: Kafka partitioning key and ordering guarantees — `docs/adr/ADR-014-...md`.
+- [ ] ADR-006–013, 015–016: not yet written (scheduled for the phases that produce them per
+  `UPGRADE_BUILD_PLAN.md`).
 - [x] ADR-017 (unlisted, added U1): call state machine modeling — see
   `docs/adr/ADR-017-call-state-machine-modeling.md`.
 
 ### Chaos / load test status
-Not started (U13/U14).
+Not started (U13/U14). U3's three real bugs (above) were found via ordinary milestone-test failures,
+not a dedicated chaos exercise — genuine findings, documented here per the same honesty standard
+chaos/load results will need, but not a substitute for U13/U14's actual chaos suite.
 
 ## Known deviations from BUILD_PLAN.md
 - None in phase *order*. Implementation-level deviations from the original spec docs, all flagged in

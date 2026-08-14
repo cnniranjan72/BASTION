@@ -17,7 +17,7 @@ from bastion_shared import GraphEdge, GraphNode, NodeStatus, TraceGraph, TraceSt
 # ApprovalGranted/ApprovalDenied are the allowed/blocked-equivalent for a
 # span resolved via the approval flow (Phase 3) — it never gets its own
 # separate CallAllowed/CallBlocked event. See docs/ARCHITECTURE.md §13.
-_STATUS_FOR_EVENT_TYPE: dict[str, NodeStatus] = {
+STATUS_FOR_EVENT_TYPE: dict[str, NodeStatus] = {
     "CallAllowed": "allowed",
     "ApprovalGranted": "allowed",
     "CallBlocked": "blocked",
@@ -67,7 +67,7 @@ def fold_events_to_graph(events: list[Any]) -> TraceGraph:
         if node is None:
             continue  # defensive: shouldn't happen, every span starts with CallAttempted
 
-        new_status = _STATUS_FOR_EVENT_TYPE.get(event_type)
+        new_status = STATUS_FOR_EVENT_TYPE.get(event_type)
         if new_status is not None:
             node.status = new_status
         if event_type in ("CallBlocked", "ApprovalDenied"):

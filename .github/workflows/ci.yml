@@ -31,9 +31,35 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
+      # U3 (v2 upgrade): interceptor/aggregator tests now exercise the real
+      # outbox->Kafka->consumer pipeline (aggregator/tests/conftest.py's
+      # `_event_pipeline` autouse fixture, plus test_outbox_resumability.py
+      # and test_kafka_resumability.py) rather than mocking it — this
+      # service needs to be live for those to run at all, matching
+      # infra/docker/docker-compose.yml's single-node KRaft setup.
+      kafka:
+        image: apache/kafka:3.7.0
+        ports: ['9092:9092']
+        env:
+          KAFKA_NODE_ID: 1
+          KAFKA_PROCESS_ROLES: broker,controller
+          KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+          KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+          KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+          KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
+          KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+          KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+          KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+          CLUSTER_ID: 'MkU3OEVBNTcwNTJENDM2Qk'
+        options: >-
+          --health-cmd "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092"
+          --health-interval 10s
+          --health-timeout 10s
+          --health-retries 15
     env:
       DATABASE_URL: postgresql://bastion:bastion@localhost:5432/bastion
       REDIS_URL: redis://localhost:6379
+      KAFKA_BOOTSTRAP_SERVERS: localhost:9092
     steps:
       - uses: actions/checkout@v4
       - name: Install uv

@@ -101,22 +101,79 @@ class Database:
         payload: dict[str, Any],
         conn: asyncpg.Connection | None = None,
     ) -> None:
-        """Assigns sequence_number and inserts the event in one transaction.
-
-        bastion_next_sequence_number() takes a transaction-scoped advisory
-        lock keyed on trace_id, so concurrent inserts for the *same* trace
-        serialize (strictly increasing, no gaps, no duplicates) while
-        inserts for *different* traces never block each other.
+        """Assigns sequence_number and inserts the event, plus (U3, v2
+        upgrade) an outbox_events row, in one transaction —
+        UPGRADE_ARCHITECTURE.md §4.1's transactional outbox: if the process
+        crashes between the two, there is no "between", both committed or
+        neither did. `bastion_next_sequence_number()` takes a
+        transaction-scoped advisory lock keyed on trace_id, so concurrent
+        inserts for the *same* trace serialize (strictly increasing, no
+        gaps, no duplicates) while inserts for *different* traces never
+        block each other.
         """
-        query = """
+        events_query = """
             INSERT INTO events
                 (trace_id, span_id, parent_span_id, agent_id, event_type, payload, sequence_number)
             VALUES
                 ($1, $2, $3, $4, $5, $6, bastion_next_sequence_number($1))
+            RETURNING event_id
+        """
+        outbox_query = """
+            INSERT INTO outbox_events
+                (event_id, trace_id, span_id, parent_span_id, agent_id, event_type, payload)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
         """
         args = (trace_id, span_id, parent_span_id, agent_id, event_type.value, payload)
-        executor = conn if conn is not None else self.pool
-        await executor.execute(query, *args)
+
+        async def _write(executor: asyncpg.Connection | asyncpg.Pool) -> None:
+            event_id = await executor.fetchval(events_query, *args)
+            await executor.execute(
+                outbox_query,
+                event_id,
+                trace_id,
+                span_id,
+                parent_span_id,
+                agent_id,
+                event_type.value,
+                payload,
+            )
+
+        if conn is not None:
+            await _write(conn)
+        else:
+            async with self.pool.acquire() as acquired, acquired.transaction():
+                await _write(acquired)
+
+    async def get_unpublished_outbox_events(self, limit: int) -> list[asyncpg.Record]:
+        return cast(
+            list[asyncpg.Record],
+            await self.pool.fetch(
+                "SELECT * FROM outbox_events WHERE published_at IS NULL ORDER BY id LIMIT $1",
+                limit,
+            ),
+        )
+
+    async def get_outbox_events_for_trace(self, trace_id: UUID) -> list[asyncpg.Record]:
+        """Test-only helper (test_outbox_resumability.py): scoping by
+        trace_id keeps resumability assertions correct regardless of
+        whatever unrelated backlog other tests may have left in the shared
+        dev database — `get_unpublished_outbox_events` is intentionally
+        global (that's what the real publisher needs), which makes it the
+        wrong tool for a single test to reason about its own rows in
+        isolation."""
+        return cast(
+            list[asyncpg.Record],
+            await self.pool.fetch(
+                "SELECT * FROM outbox_events WHERE trace_id = $1 ORDER BY id", trace_id
+            ),
+        )
+
+    async def mark_outbox_events_published(self, ids: list[int]) -> None:
+        if not ids:
+            return
+        await self.pool.execute(
+            "UPDATE outbox_events SET published_at = now() WHERE id = ANY($1::bigint[])", ids
+        )
 
     async def get_events_for_trace(self, trace_id: UUID) -> list[asyncpg.Record]:
         return cast(

@@ -6,6 +6,15 @@ folds each notified trace's events into a TraceGraph (graph.py) — the same
 fold GET /traces/{id} uses on demand — and persists trace_summaries once a
 trace reaches a terminal state (docs/ARCHITECTURE.md §14).
 
+U3 (v2 upgrade): the trigger mechanism moved from Postgres LISTEN/NOTIFY to
+consuming Kafka's tool-events topic (kafka_consumer.py) — Postgres stays
+the durable source of truth (the transactional outbox writes here first;
+see interceptor/db.py), Kafka is fan-out/distribution only
+(UPGRADE_ARCHITECTURE.md §4.2). `_handle_notification` below is completely
+unchanged: it re-fetches and re-folds the whole trace from Postgres on
+every message, which is exactly what makes Kafka's at-least-once delivery
+safe to consume without a separate dedup step.
+
 Phase 5: every /traces endpoint requires a real access token (human_auth.py,
 verify-only — the aggregator never issues tokens) and is scoped to the
 caller's own org, derived from the JWT rather than an explicit `org_id`
@@ -53,9 +62,9 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from .config import config
 from .db import db
-from .graph import fold_events_to_graph
+from .graph import STATUS_FOR_EVENT_TYPE, fold_events_to_graph
 from .human_auth import AuthenticatedUser, authenticate_user, decode_bearer_token
-from .listener import EventListener
+from .kafka_consumer import KafkaEventConsumer
 from .logging import configure_logging, log
 from .ws import manager as ws_manager
 
@@ -63,7 +72,12 @@ configure_logging()
 
 require_any_role = Depends(authenticate_user)
 
-listener = EventListener()
+# U3 (v2 upgrade): consumes tool-events instead of v1's Postgres
+# LISTEN/NOTIFY (listener.py, kept in the tree, no longer wired here — see
+# docs/adr/ADR-002). group_id="aggregator" is this consumer group's
+# identity — its committed offset is what "resumes correctly after a
+# restart" actually means (proven in the U3 milestone test).
+kafka_consumer = KafkaEventConsumer(group_id="aggregator")
 # Live in-memory tracking (ARCHITECTURE.md §2.5) — updated on every
 # notification, evicted once a trace is persisted to trace_summaries and no
 # longer "active." Not the source of truth (events/trace_summaries are);
@@ -75,46 +89,65 @@ active_traces: dict[UUID, TraceGraph] = {}
 _CREATION_EVENT = "CallAttempted"
 
 
-async def _handle_notification(data: dict[str, str]) -> None:
+async def _handle_notification(data: dict[str, Any]) -> None:
     trace_id = UUID(data["trace_id"])
     span_id = UUID(data["span_id"])
+    agent_id = UUID(data["agent_id"])
     event_type = data["event_type"]
+    payload = data.get("payload") or {}
 
+    # U3 (v2 upgrade): broadcast exactly what *this* event represents,
+    # derived from its own type + payload — not a fresh fold of the
+    # trace's current overall state. A real bug found by U3's milestone
+    # test: v1's original design re-folded the whole trace on every
+    # notification and broadcast whatever the *current* status happened to
+    # be, which worked under Postgres LISTEN/NOTIFY's near-zero latency
+    # (the next event essentially never existed yet by the time a
+    # notification was handled) but silently drops intermediate statuses
+    # under Kafka's real, if still small, delivery latency — if
+    # CallAllowed and CallCompleted both land in Postgres before the
+    # CallAllowed notification is processed, the old code broadcast
+    # "completed" twice and "allowed" never.
+    if event_type == _CREATION_EVENT:
+        await ws_manager.broadcast(
+            agent_id,
+            NodeAddedMessage(
+                node=LiveNode(
+                    span_id=span_id, tool_name=payload.get("tool_name", ""), status="pending"
+                )
+            ),
+        )
+        parent_span_id_raw = data.get("parent_span_id")
+        if parent_span_id_raw:
+            await ws_manager.broadcast(
+                agent_id,
+                EdgeAddedMessage.model_validate({"from": UUID(parent_span_id_raw), "to": span_id}),
+            )
+    else:
+        status = STATUS_FOR_EVENT_TYPE.get(event_type)
+        # STATUS_FOR_EVENT_TYPE's values never actually include "pending"
+        # (only _CREATION_EVENT produces that, handled above) — the
+        # exclusion here is for mypy's benefit narrowing NodeStatus down to
+        # NodeUpdatedMessage's own status literal, which doesn't accept it.
+        if status is not None and status != "pending":
+            await ws_manager.broadcast(
+                agent_id,
+                NodeUpdatedMessage(
+                    span_id=span_id,
+                    status=status,
+                    latency_ms=payload.get("latency_ms"),
+                    cost=payload.get("cost"),
+                    reason=payload.get("reason") or payload.get("error"),
+                ),
+            )
+
+    # Trace-terminal detection and trace_summaries persistence legitimately
+    # want the *current* overall state, unlike the per-notification
+    # broadcast above — a fresh fold is correct here.
     events = await db.get_events_for_trace(trace_id)
     if not events:
         return
     graph = fold_events_to_graph(events)
-
-    node = next((n for n in graph.nodes if n.span_id == span_id), None)
-    if node is not None:
-        if event_type == _CREATION_EVENT:
-            await ws_manager.broadcast(
-                graph.agent_id,
-                NodeAddedMessage(
-                    node=LiveNode(span_id=node.span_id, tool_name=node.tool_name, status="pending")
-                ),
-            )
-            if node.parent_span_id is not None:
-                await ws_manager.broadcast(
-                    graph.agent_id,
-                    EdgeAddedMessage.model_validate(
-                        {"from": node.parent_span_id, "to": node.span_id}
-                    ),
-                )
-        elif node.status != "pending":
-            # Only CallAttempted (handled above) ever sets "pending"; every
-            # other event type transitions a node past it, which is exactly
-            # NodeUpdatedMessage's narrower status literal (no "pending").
-            await ws_manager.broadcast(
-                graph.agent_id,
-                NodeUpdatedMessage(
-                    span_id=node.span_id,
-                    status=node.status,
-                    latency_ms=node.latency_ms,
-                    cost=node.cost,
-                    reason=node.reason,
-                ),
-            )
 
     if graph.status == "running":
         active_traces[trace_id] = graph
@@ -130,11 +163,11 @@ async def _handle_notification(data: dict[str, str]) -> None:
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     await db.connect()
-    await listener.start(_handle_notification)
+    await kafka_consumer.start(_handle_notification)
     try:
         yield
     finally:
-        await listener.stop()
+        await kafka_consumer.stop()
         await db.close()
 
 

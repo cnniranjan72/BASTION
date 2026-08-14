@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import hashlib
 import os
 import subprocess
@@ -13,10 +15,11 @@ import httpx
 import pytest
 import pytest_asyncio
 from bastion_aggregator.db import db
-from bastion_aggregator.main import _handle_notification, listener
+from bastion_aggregator.main import _handle_notification, kafka_consumer
 from bastion_interceptor.db import db as interceptor_db
 from bastion_interceptor.human_auth import hash_password
 from bastion_interceptor.main import app as interceptor_app
+from bastion_interceptor.outbox_publisher import OutboxPublisher
 from bastion_interceptor.redis_bus import redis_bus as interceptor_redis_bus
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -53,15 +56,6 @@ async def _db_pool(_migrated_database: None) -> AsyncIterator[None]:
 
 
 @pytest_asyncio.fixture(scope="session", autouse=True)
-async def _event_listener(_db_pool: None) -> AsyncIterator[None]:
-    await listener.start(_handle_notification)
-    try:
-        yield
-    finally:
-        await listener.stop()
-
-
-@pytest_asyncio.fixture(scope="session", autouse=True)
 async def _interceptor_connected(_migrated_database: None) -> AsyncIterator[None]:
     """Cross-service test setup: generating real trace data to replay needs
     a fully functional interceptor app (POST /intercept), which has its own
@@ -73,6 +67,28 @@ async def _interceptor_connected(_migrated_database: None) -> AsyncIterator[None
     finally:
         await interceptor_redis_bus.close()
         await interceptor_db.close()
+
+
+@pytest_asyncio.fixture(scope="session", autouse=True)
+async def _event_pipeline(_db_pool: None, _interceptor_connected: None) -> AsyncIterator[None]:
+    """U3 (v2 upgrade): the real production pipeline, not a test shortcut —
+    interceptor writes events + outbox rows, the outbox publisher ships
+    them to Kafka, the aggregator's Kafka consumer calls
+    _handle_notification exactly as it does in production. Replaces v1's
+    directly-wired Postgres LISTEN/NOTIFY listener; every aggregator test
+    that depends on live-tracking/WS behavior now exercises the actual v2
+    data path end to end, per CLAUDE.md's no-mock-data rule."""
+    publisher = OutboxPublisher()
+    publisher_task = asyncio.create_task(publisher.run_forever())
+    await kafka_consumer.start(_handle_notification)
+    try:
+        yield
+    finally:
+        await kafka_consumer.stop()
+        publisher_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await publisher_task
+        await publisher.stop()
 
 
 @pytest_asyncio.fixture

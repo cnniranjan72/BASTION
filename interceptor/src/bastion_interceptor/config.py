@@ -29,6 +29,10 @@ class Config:
     jwt_private_key_path: str
     jwt_public_key_path: str
     refresh_token_ttl_days: int
+    # U3 (v2 upgrade). Only the outbox publisher process actually connects
+    # to this — the interceptor's own hot path never touches Kafka
+    # directly (§4.2: Kafka is distribution, not on the critical write path).
+    kafka_bootstrap_servers: str
 
 
 def load_config() -> Config:
@@ -48,6 +52,7 @@ def load_config() -> Config:
             "JWT_PUBLIC_KEY_PATH", str(_REPO_ROOT / "infra" / "keys" / "jwt_public.pem")
         ),
         refresh_token_ttl_days=int(os.environ.get("REFRESH_TOKEN_TTL_DAYS", "30")),
+        kafka_bootstrap_servers=os.environ.get("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092"),
     )
 
 

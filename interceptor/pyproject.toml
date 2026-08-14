@@ -12,6 +12,7 @@ dependencies = [
   "structlog>=24.4",
   "argon2-cffi>=23.1",
   "prometheus-client>=0.21",
+  "aiokafka>=0.11",
 ]
 
 [project.optional-dependencies]

@@ -18,6 +18,7 @@ class Config:
     # service"). infra/keys/generate_dev_keys.py creates this for local
     # dev/CI.
     jwt_public_key_path: str
+    kafka_bootstrap_servers: str
 
 
 def load_config() -> Config:
@@ -31,6 +32,7 @@ def load_config() -> Config:
         jwt_public_key_path=os.environ.get(
             "JWT_PUBLIC_KEY_PATH", str(_REPO_ROOT / "infra" / "keys" / "jwt_public.pem")
         ),
+        kafka_bootstrap_servers=os.environ.get("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092"),
     )
 
 

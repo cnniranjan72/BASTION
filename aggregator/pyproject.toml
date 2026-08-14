@@ -11,6 +11,7 @@ dependencies = [
   "redis>=5.2",
   "structlog>=24.4",
   "prometheus-client>=0.21",
+  "aiokafka>=0.11",
 ]
 
 [project.optional-dependencies]

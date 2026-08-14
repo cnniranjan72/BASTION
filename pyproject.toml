@@ -29,6 +29,10 @@ ignore_missing_imports = true
 module = "redis.*"
 ignore_missing_imports = true
 
+[[tool.mypy.overrides]]
+module = "aiokafka.*"
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 # Multiple packages in this workspace have same-named test files
 # (test_health.py in both interceptor/ and aggregator/) — importlib mode
