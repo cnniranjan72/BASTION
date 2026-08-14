@@ -203,6 +203,14 @@ exactly like a JWT — identical RBAC, no separate weaker path.
   write time, or the call fails with 409 `POLICY_VERSION_CONFLICT` instead of silently creating a
   version past one a concurrent editor already committed — the client should re-`GET /policies`,
   reconcile against the real current version, and retry with the fresh `based_on_version`.
+
+  U6 (v2 upgrade, `docs/adr/ADR-015`): each rule in `definition` may also carry a `limits` object —
+  `max_transaction_amount`, `calls_per_minute`, `org_spend_per_day`, `agent_llm_budget_per_hour`, all
+  optional. Enforced only when that rule's `action` is `allow` and it matched; a violated limit turns
+  the call into a `blocked` decision at `/intercept` time with a specific reason, same response shape
+  as any other policy block. Independent of `limits`, `/intercept` also fails a call fast (same
+  `blocked` shape, reason `"circuit breaker open for tool '<name>'"`) if that agent/tool pair's
+  circuit breaker is currently OPEN — this isn't policy-configurable, it's a fixed system protection.
 - `GET /policies` (any role) — all versions for the caller's org.
 - `POST /policies/{id}/activate` (role: `owner`/`admin`) — deactivates every other version
   in the same policy set, activates this one, hot-reloads every interceptor instance via

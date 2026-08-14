@@ -61,8 +61,26 @@ Flow: (1) agent wants to call a tool → (2) SDK wraps the call, sends it to the
 - match:
     tool: "*"
   action: allow  # default
+- match:
+    tool: "payments.transfer"
+  action: allow
+  limits:
+    max_transaction_amount: 100     # U6 (v2 upgrade): $100/call hard cap
+    calls_per_minute: 10            # per (agent, this tool) — a wildcard match.tool scopes this per-agent instead
+    org_spend_per_day: 5000
+    agent_llm_budget_per_hour: 5
 ```
-- Hot reload: policy changes pushed via pub/sub (Redis pub/sub or Postgres LISTEN/NOTIFY) to all interceptor instances, no redeploy needed.
+- `limits:` (U6, v2 upgrade, `docs/adr/ADR-015`) is checked only once `match`/`condition` have already
+  decided a rule's `action: allow` applies — real, stateful, Redis-backed enforcement
+  (`interceptor/limits.py`), distinct from `condition`'s stateless single-call safe-eval. A violated
+  limit converts the decision to a block with a specific reason, same event/response shape as any
+  other policy block. Not every dimension listed in UPGRADE_ARCHITECTURE.md §8 is implemented — see
+  ADR-015 for what's deliberately out of scope (a distinct tool-call-count budget and a runtime/
+  duration budget) and why.
+- A three-state circuit breaker (CLOSED/OPEN/HALF_OPEN) per `(agent_id, tool_name)` also gates the
+  `allow` path, independent of any policy rule's own configuration (`interceptor/circuit_breaker.py`,
+  ADR-015) — protects the downstream systems agents call, not governed by the DSL at all.
+- Hot reload: policy changes pushed via pub/sub (Redis pub/sub or Postgres LISTEN/NOTIFY) to all interceptor instances, no redeploy needed. U5 (v2 upgrade) adds a periodic reconciliation loop as a backstop for whatever the pub/sub broadcast misses — see `docs/adr/ADR-007`.
 
 ### 2.4 Event Store (event sourcing core)
 - Append-only. Every event is immutable: `CallAttempted`, `PolicyEvaluated`, `CallAllowed`, `CallBlocked`, `CallPendingApproval`, `ApprovalGranted`, `ApprovalDenied`, `CallCompleted`, `CallFailed`.

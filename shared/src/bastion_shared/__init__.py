@@ -53,7 +53,7 @@ from .jwt_auth import (
     load_key_file,
 )
 from .kafka_topics import TOOL_EVENTS_TOPIC
-from .policy import Policy, PolicyDefinition, PolicyMatch, PolicyRule
+from .policy import Policy, PolicyDefinition, PolicyLimits, PolicyMatch, PolicyRule
 from .policy_api import CreatePolicyRequest, PolicyResponse
 from .realtime import (
     EdgeAddedMessage,
@@ -121,6 +121,7 @@ __all__ = [
     "load_key_file",
     "Policy",
     "PolicyDefinition",
+    "PolicyLimits",
     "PolicyMatch",
     "PolicyRule",
     "CreatePolicyRequest",

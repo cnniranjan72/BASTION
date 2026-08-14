@@ -219,6 +219,24 @@ class Database:
             ),
         )
 
+    async def get_span_tool_name(self, span_id: UUID) -> str | None:
+        """U6 (v2 upgrade): the circuit breaker (circuit_breaker.py) is
+        keyed by (agent_id, tool_name), but /spans/{id}/complete's own
+        lookup (get_span_decision, above) only ever selects the terminal
+        decision event's columns — tool_name lives in CallAttempted's
+        payload instead, a separate event for the same span."""
+        return cast(
+            "str | None",
+            await self.pool.fetchval(
+                """
+                SELECT payload->>'tool_name' FROM events
+                WHERE span_id = $1 AND event_type = 'CallAttempted'
+                LIMIT 1
+                """,
+                span_id,
+            ),
+        )
+
     # -- Policies (Phase 2) --------------------------------------------
 
     async def get_active_policies(self) -> list[asyncpg.Record]:
@@ -389,15 +407,21 @@ class Database:
         )
 
     async def expire_stale_approval(
-        self, approval_id: UUID, ttl_seconds: float
+        self, approval_id: UUID, ttl_seconds: float, conn: asyncpg.Connection | None = None
     ) -> asyncpg.Record | None:
         """Lazily flips a pending approval past its absolute deadline to
         timed_out — checked on each long-poll rather than via a background
         sweeper (see docs/ARCHITECTURE.md's approval-flow section). No-op
-        (returns None) if not yet expired or already resolved."""
+        (returns None) if not yet expired or already resolved.
+
+        `conn`, same reasoning as resolve_approval: pass the transaction
+        this write shares with the following ApprovalDenied event insert,
+        so no external reader can observe status='timed_out' before that
+        event exists."""
+        executor = conn if conn is not None else self.pool
         return cast(
             "asyncpg.Record | None",
-            await self.pool.fetchrow(
+            await executor.fetchrow(
                 """
                 UPDATE approval_requests
                 SET status = 'timed_out'
@@ -411,17 +435,33 @@ class Database:
         )
 
     async def resolve_approval(
-        self, approval_id: UUID, *, status: str, resolved_by: UUID | None, org_id: UUID
+        self,
+        approval_id: UUID,
+        *,
+        status: str,
+        resolved_by: UUID | None,
+        org_id: UUID,
+        conn: asyncpg.Connection | None = None,
     ) -> asyncpg.Record | None:
         """Only transitions a *pending* request belonging to `org_id` — both
         guards are in the one atomic UPDATE (not a separate check-then-act),
         so double-resolution (two approvers racing) and a cross-org
         approval_id are both a clean no-op, never a real mutation that's
         merely hidden from the response afterward (same reasoning as
-        activate_policy's org check)."""
+        activate_policy's org check).
+
+        `conn`, if passed, must be the same transaction main.py's
+        `_resolve_approval` uses for the immediately-following
+        ApprovalGranted/ApprovalDenied event insert — see that function's
+        docstring for the real race this closes: without one shared
+        transaction, a concurrent GET /approvals/{id} poller can observe
+        `status = 'approved'` (this write, committed) before the event
+        exists (the next write, not yet committed), race ahead to
+        POST /spans/{id}/complete, and get a spurious 404 there."""
+        executor = conn if conn is not None else self.pool
         return cast(
             "asyncpg.Record | None",
-            await self.pool.fetchrow(
+            await executor.fetchrow(
                 """
                 UPDATE approval_requests ar
                 SET status = $2, resolved_by = $3, resolved_at = now()

@@ -30,6 +30,18 @@ class RedisBus:
         self._pubsub: redis.client.PubSub | None = None
         self._listener_task: asyncio.Task[None] | None = None
 
+    @property
+    def raw_client(self) -> redis.Redis:
+        """U6 (v2 upgrade): direct access to the underlying connection for
+        limits.py/circuit_breaker.py's counter operations (INCR/EXPIRE/GET,
+        not pub/sub) — reuses this one connection pool rather than opening a
+        second one for what's still fundamentally the same Redis instance,
+        same ephemeral-acceleration role Redis already plays everywhere else
+        in this system (§4.2)."""
+        if self._redis is None:
+            raise RuntimeError("RedisBus.connect() was not called")
+        return self._redis
+
     async def connect(self) -> None:
         # protocol=2 (RESP2) deliberately: the RESP3 HELLO handshake this
         # client defaults to fails against the local Redis in this

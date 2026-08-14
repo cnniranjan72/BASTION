@@ -781,7 +781,7 @@ Target architecture: `UPGRADE_ARCHITECTURE.md`. Target frontend: `FRONTEND_V2.md
 file before starting (migrations 0001–0006 present, 67 tests passing, live on Render, aggregator
 confirmed still on Postgres LISTEN/NOTIFY per v1 design) — no mismatch found.
 
-**Current phase**: U1–U5 complete, U6 next.
+**Current phase**: U1–U6 complete, U7 next.
 
 ### Phase status
 - **U1 — Explicit state machine: done.** `shared/src/bastion_shared/call_state.py` — `CallState` enum
@@ -870,6 +870,9 @@ confirmed still on Postgres LISTEN/NOTIFY per v1 design) — no mismatch found.
   write and the span lookup `/spans/{id}/complete` depends on, rather than pure resource contention
   as originally assumed. Not blocking U5's completion; flagged for a future session.
 
+  **Resolved, U6**: it was exactly that race, not resource contention — root-caused and fixed, see
+  U6's phase-status entry above for the full mechanism and fix. No longer an open item.
+
   **Second open item, found while confirming the full suite before committing U3**:
   `aggregator/tests/test_live_ws.py` errored (not failed — during fixture setup) on 2 of 2
   consecutive full-suite runs, each time a raw `ConnectionResetError: [WinError 64] The specified
@@ -918,7 +921,49 @@ confirmed still on Postgres LISTEN/NOTIFY per v1 design) — no mismatch found.
   converges it within its interval — passed on first run. Two more tests cover `reconcile_once()`
   directly (non-timing-dependent): healing a drifted entry and evicting one no longer active
   anywhere. ADR-007 written.
-- U6–U16: not started.
+- **U6 — Circuit breakers + multi-dimensional rate limiting / cost governance: done.** **Flagged
+  doc/code conflict** (same class as U4's, per standing rule): `UPGRADE_ARCHITECTURE.md` §7 places the
+  breaker "right before the real downstream call is made," assuming the interceptor makes that call —
+  it doesn't (v1 deviation #2: the SDK does, client-side). **Resolution** (ADR-015): the breaker is
+  checked once policy evaluation has already decided a call would otherwise be `allow` (the last
+  checkpoint before the SDK is told to proceed), and updated retroactively from
+  `POST /spans/{id}/complete`, the only channel through which the interceptor ever learns a real
+  outcome. State lives in Redis (`circuit_breaker.py`), keyed `(agent_id, tool_name)`, standard
+  three-state CLOSED/OPEN/HALF_OPEN. `limits:` (`shared/policy.py`'s `PolicyLimits`,
+  `interceptor/limits.py`) extends the DSL with real, working Redis-backed enforcement for
+  `max_transaction_amount`, `calls_per_minute` (doubles as both "per agent" and "per tool" from §8's
+  list via the matched rule's own `match.tool` scope), `org_spend_per_day`, and
+  `agent_llm_budget_per_hour` — deliberately NOT implemented (stated explicitly, not silently
+  dropped): a distinct tool-call-count budget (redundant with `calls_per_minute`) and a runtime/
+  duration budget (unknowable until call completion, after the decision point these limits gate).
+  Both mechanisms hardened to fail *open* on a Redis error (`except redis.RedisError`) rather than let
+  a Redis outage 500 the hot path — a real requirement under CLAUDE.md rule #4, caught and fixed
+  during this same phase rather than left as a known gap. Milestone tests
+  (`interceptor/tests/test_circuit_breaker_and_limits.py`, 5 cases): repeated failures open the
+  breaker, a fail-fast call never invokes `execute()` (proving the downstream is genuinely never hit),
+  a backdated `opened_at` half-opens it, a successful probe closes it, a failed probe reopens it; a
+  $100 cap blocks a $150 call and allows a $50 one (the literal milestone wording); `calls_per_minute`
+  and `org_spend_per_day` get their own direct tests too, proving those dimensions are real
+  enforcement, not inert fields. All 5 passed on first run. ADR-015 written.
+
+  **Real bug found and fixed during U6 (not U6's own code — an existing, previously-flaky test's
+  actual root cause, finally diagnosed)**: while re-running the full suite to confirm U6's changes,
+  `test_approval_flow_pauses_and_resumes_on_approve` reproduced again — this time in a *small*,
+  3-file run, not just under full-suite load, with a clean traceback: `404` on
+  `POST /spans/{id}/complete` immediately after `POST /approvals/{id}/approve`. Root cause: `main.py`'s
+  `_resolve_approval` did two separate, non-atomic writes on the same connection pool —
+  `db.resolve_approval` (UPDATE `approval_requests.status`) committed first, then
+  `_emit_approval_resolution_event` (INSERT the `ApprovalGranted` event) committed second. A
+  concurrent `GET /approvals/{id}` poller (exactly what the SDK's `_wait_for_approval` does) could
+  observe `status = 'approved'` before the event existed, race ahead to
+  `POST /spans/{id}/complete`, and hit a real 404 (`get_span_decision` found nothing yet) — the
+  previously-undiagnosed cause of a flake first noted in U3. Fixed by wrapping both writes (and the
+  equivalent approval-timeout path in `GET /approvals/{id}`) in one shared Postgres transaction —
+  `db.resolve_approval`/`expire_stale_approval`/`insert_event` all gained an optional `conn` parameter
+  for this. Confirmed fixed: 5/5 clean runs of the previously-failing 3-file combo, plus a full
+  workspace run (180 passed) with the flake absent. This closes the "open, not fully resolved" item
+  from U3/U5's notes below — superseded by this entry, not still open.
+- U7–U16: not started.
 
 ### ADR checklist (mirrors `ADR_INDEX.md`)
 - [x] ADR-001: PostgreSQL as source of truth — `docs/adr/ADR-001-...md`.

@@ -42,6 +42,7 @@ from typing import Any, Literal
 from uuid import UUID
 
 import asyncpg
+import redis
 import structlog
 from bastion_shared import (
     AccessTokenClaims,
@@ -87,6 +88,8 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
+from . import circuit_breaker
+from . import limits as limits_engine
 from . import policy as policy_engine
 from .auth import AuthenticatedAgent, authenticate_agent, hash_api_key
 from .config import config
@@ -556,6 +559,51 @@ async def _decide_and_record(
     decision = policy_engine.evaluate(compiled_policy, body.tool_name, body.args)
     policy_id = compiled_policy.policy_id if compiled_policy is not None else None
 
+    # U6 (v2 upgrade): both checks only apply once policy evaluation has
+    # already decided this call would otherwise be allowed — a block or
+    # pending_approval decision is unaffected, matching
+    # UPGRADE_ARCHITECTURE.md §7/§8's "after policy evaluation has already
+    # allowed it" placement. Reassigning `decision` here (rather than
+    # branching separately) lets the existing block-handling code below run
+    # unchanged for either trigger.
+    #
+    # CLAUDE.md rule #4: /intercept never blocks on non-essential work —
+    # both are wrapped to fail *open* (skip the check, log, proceed as if
+    # this phase didn't exist) on a Redis error, rather than let a Redis
+    # outage 500 the entire hot path over what's meant to be a protective,
+    # not load-bearing, mechanism (ADR-015's failure-modes section).
+    if decision.action == "allow" and decision.limits is not None:
+        assert decision.rule_tool is not None  # always set alongside limits, see policy.py
+        try:
+            limit_reason = await limits_engine.check_and_apply_limits(
+                redis_client=redis_bus.raw_client,
+                agent_id=agent.id,
+                org_id=agent.org_id,
+                rule_tool=decision.rule_tool,
+                args=body.args,
+                limits=decision.limits,
+            )
+        except redis.RedisError:
+            log.exception("limits check failed open (Redis unreachable)", tool_name=body.tool_name)
+            limit_reason = None
+        if limit_reason is not None:
+            decision = policy_engine.Decision(action="block", reason=limit_reason)
+
+    if decision.action == "allow":
+        try:
+            breaker_open = await circuit_breaker.is_open(
+                redis_bus.raw_client, agent_id=agent.id, tool_name=body.tool_name
+            )
+        except redis.RedisError:
+            log.exception(
+                "circuit breaker check failed open (Redis unreachable)", tool_name=body.tool_name
+            )
+            breaker_open = False
+        if breaker_open:
+            decision = policy_engine.Decision(
+                action="block", reason=f"circuit breaker open for tool '{body.tool_name}'"
+            )
+
     if decision.action == "require_approval":
         guard_event(state, EventType.CALL_PENDING_APPROVAL)
         await db.insert_event(
@@ -672,6 +720,36 @@ async def complete_span(
             latency_ms=body.latency_ms, cost=body.cost, result=body.result, error=body.error
         ).model_dump(),
     )
+
+    # U6 (v2 upgrade): this is the only place the interceptor ever learns
+    # whether a call actually succeeded or failed — it never makes the real
+    # downstream call itself (the SDK does, client-side), so the breaker's
+    # state can only be updated retroactively, from what the SDK reports
+    # back here. tool_name isn't on `span` (get_span_decision only selects
+    # the terminal decision event's columns) — recovered separately from
+    # this span's original CallAttempted event.
+    tool_name = await db.get_span_tool_name(span_id)
+    if tool_name is not None:
+        try:
+            if event_type == EventType.CALL_COMPLETED:
+                await circuit_breaker.record_success(
+                    redis_bus.raw_client, agent_id=agent.id, tool_name=tool_name
+                )
+            else:
+                await circuit_breaker.record_failure(
+                    redis_bus.raw_client, agent_id=agent.id, tool_name=tool_name
+                )
+        except redis.RedisError:
+            # The actual call already happened (successfully or not) and
+            # its outcome is already durably recorded in `events` above —
+            # losing the breaker-state update to a Redis hiccup must never
+            # turn a real, completed call into a 500 the caller has to
+            # handle. Worst case: this one outcome doesn't count toward the
+            # breaker, which self-corrects on the next call either way.
+            log.exception(
+                "circuit breaker record failed open (Redis unreachable)", tool_name=tool_name
+            )
+
     return CompleteSpanResponse(span_id=span_id, status=body.status)
 
 
@@ -1026,13 +1104,22 @@ _APPROVAL_EVENT_DECISION: dict[EventType, Literal["allowed", "blocked"]] = {
 
 
 async def _emit_approval_resolution_event(
-    record: Any, event_type: EventType, reason: str | None
+    record: Any,
+    event_type: EventType,
+    reason: str | None,
+    *,
+    conn: asyncpg.Connection | None = None,
 ) -> None:
     # U1: db.resolve_approval/expire_stale_approval's own atomic
     # `WHERE status = 'pending'` already guarantees this call is currently
     # PENDING_APPROVAL by the time either caller reaches here — guard_event
     # makes that guarantee explicit and machine-checked rather than only
     # implied by the SQL, per CLAUDE_UPGRADE.md rule #3.
+    #
+    # `conn`, if passed, must be the same transaction the caller's
+    # status-changing UPDATE (resolve_approval/expire_stale_approval) ran
+    # in — see resolve_approval's docstring for the real, previously-
+    # undiagnosed race this closes.
     guard_event(CallState.PENDING_APPROVAL, event_type)
     lineage = await db.get_span_lineage(record["span_id"])
     if lineage is None:
@@ -1046,6 +1133,7 @@ async def _emit_approval_resolution_event(
         payload=PolicyDecisionPayload(
             policy_id=None, decision=_APPROVAL_EVENT_DECISION[event_type], reason=reason
         ).model_dump(mode="json"),
+        conn=conn,
     )
 
 
@@ -1091,11 +1179,18 @@ async def get_approval(
         # a signal) or False (timed out), Postgres below is re-checked as
         # the source of truth either way — see redis_bus.wait_for_approval_signal.
         await redis_bus.wait_for_approval_signal(approval_id, config.approval_long_poll_seconds)
-        expired = await db.expire_stale_approval(approval_id, config.approval_ttl_seconds)
-        if expired is not None:
-            await _emit_approval_resolution_event(
-                expired, EventType.APPROVAL_DENIED, "approval timed out"
+        # One shared transaction for the status UPDATE and the following
+        # ApprovalDenied event insert — same real race _resolve_approval's
+        # docstring covers, just via the timeout path instead of approve/deny.
+        async with db.pool.acquire() as conn, conn.transaction():
+            expired = await db.expire_stale_approval(
+                approval_id, config.approval_ttl_seconds, conn=conn
             )
+            if expired is not None:
+                await _emit_approval_resolution_event(
+                    expired, EventType.APPROVAL_DENIED, "approval timed out", conn=conn
+                )
+        if expired is not None:
             record = expired
         else:
             refreshed = await db.get_approval_request(approval_id)
@@ -1116,25 +1211,40 @@ async def list_pending_approvals(
 async def _resolve_approval(
     approval_id: UUID, status: str, request: Request, user: AuthenticatedUser
 ) -> ApprovalRequestResponse:
-    record = await db.resolve_approval(
-        approval_id, status=status, resolved_by=user.id, org_id=user.org_id
-    )
-    if record is None:
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "error": {
-                    "code": "APPROVAL_NOT_PENDING",
-                    "message": (
-                        f"approval {approval_id} is not pending "
-                        "(already resolved, doesn't exist, or belongs to a different org)"
-                    ),
-                    "request_id": request.state.request_id,
-                }
-            },
+    # Real bug, found and fixed this session while investigating a
+    # previously-documented intermittent test failure
+    # (test_approval_flow_pauses_and_resumes_on_approve — see PROGRESS.md):
+    # resolve_approval's status UPDATE and the following ApprovalGranted/
+    # ApprovalDenied event INSERT used to be two separate, non-atomic
+    # writes on the same pool. A concurrent GET /approvals/{id} poller
+    # (exactly what the SDK's _wait_for_approval does) could observe
+    # status='approved' already committed while the event didn't exist
+    # yet, race ahead to POST /spans/{id}/complete, and get a spurious 404
+    # (get_span_decision found nothing). One shared transaction closes that
+    # window entirely: no external reader ever sees one write without the
+    # other.
+    async with db.pool.acquire() as conn, conn.transaction():
+        record = await db.resolve_approval(
+            approval_id, status=status, resolved_by=user.id, org_id=user.org_id, conn=conn
         )
-    event_type = EventType.APPROVAL_GRANTED if status == "approved" else EventType.APPROVAL_DENIED
-    await _emit_approval_resolution_event(record, event_type, None)
+        if record is None:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": {
+                        "code": "APPROVAL_NOT_PENDING",
+                        "message": (
+                            f"approval {approval_id} is not pending "
+                            "(already resolved, doesn't exist, or belongs to a different org)"
+                        ),
+                        "request_id": request.state.request_id,
+                    }
+                },
+            )
+        event_type = (
+            EventType.APPROVAL_GRANTED if status == "approved" else EventType.APPROVAL_DENIED
+        )
+        await _emit_approval_resolution_event(record, event_type, None, conn=conn)
     await redis_bus.publish_approval_resolved(approval_id)
     return _approval_response(record)
 

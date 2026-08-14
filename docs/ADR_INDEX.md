@@ -16,7 +16,7 @@ Each of these must exist as its own file under `docs/adr/` before Phase 9 (v2) i
 - [ ] ADR-012: Read replica introduction criteria (benchmark-triggered, not speculative)
 - [ ] ADR-013: Failure semantics — fail-open vs fail-closed decisions per component (SDK-to-interceptor, Redis-down, approval-timeout)
 - [x] ADR-014: Kafka partitioning key (trace_id vs agent_id) and ordering guarantees
-- [ ] ADR-015: Circuit breaker thresholds and scope (per-tool vs per-host)
+- [x] ADR-015: Circuit breaker thresholds and scope (per-tool vs per-host)
 - [x] ADR-016: Optimistic concurrency for policy edits (version check vs alternative)
 
 Add new ADRs as new non-obvious decisions get made during the build — this list is the required minimum, not a ceiling.

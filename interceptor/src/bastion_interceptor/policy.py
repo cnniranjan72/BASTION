@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
-from bastion_shared import PolicyDefinition
+from bastion_shared import PolicyDefinition, PolicyLimits
 from pydantic import TypeAdapter
 
 
@@ -109,6 +109,7 @@ class CompiledRule:
     pattern: re.Pattern[str] | None
     database: str | None
     condition: ast.Expression | None
+    limits: PolicyLimits | None
 
 
 @dataclass(frozen=True)
@@ -128,6 +129,7 @@ def compile_policy(
             pattern=re.compile(rule.match.pattern) if rule.match.pattern else None,
             database=rule.match.database,
             condition=compile_condition(rule.condition) if rule.condition else None,
+            limits=rule.limits,
         )
         for rule in definition
     ]
@@ -150,6 +152,16 @@ def compile_policy_from_raw(
 class Decision:
     action: str  # "allow" | "block" | "require_approval"
     reason: str | None = None
+    # U6 (v2 upgrade): the matched allow-rule's limits (if any) and its own
+    # `match.tool` (verbatim — "*" or a specific tool name), for the caller
+    # (main.py's _decide_and_record) to check statefully against Redis
+    # after this stateless evaluation — see limits.py. `rule_tool` matters
+    # because a wildcard rule's calls_per_minute must key on "*", not on
+    # whatever specific tool this one call happened to name, or "per agent"
+    # governance would silently fragment into a separate counter per tool.
+    # Neither is ever set for block/require_approval decisions.
+    limits: PolicyLimits | None = None
+    rule_tool: str | None = None
 
 
 def evaluate(compiled: CompiledPolicy | None, tool_name: str, args: dict[str, Any]) -> Decision:
@@ -170,7 +182,7 @@ def evaluate(compiled: CompiledPolicy | None, tool_name: str, args: dict[str, An
             continue
 
         if rule.action == "allow":
-            return Decision(action="allow")
+            return Decision(action="allow", limits=rule.limits, rule_tool=rule.tool)
         return Decision(action=rule.action, reason=f"blocked by policy rule for tool '{rule.tool}'")
 
     return Decision(action="allow")
