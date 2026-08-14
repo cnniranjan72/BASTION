@@ -9,7 +9,7 @@ Each of these must exist as its own file under `docs/adr/` before Phase 9 (v2) i
 - [x] ADR-005: Idempotency key design and enforcement
 - [ ] ADR-006: Redis as policy cache (ephemeral, not authoritative)
 - [x] ADR-007: Policy distribution — eventual consistency + reconciliation loop
-- [ ] ADR-008: WebSocket fan-out architecture (Redis pub/sub across gateway instances)
+- [x] ADR-008: WebSocket fan-out architecture (Redis pub/sub across gateway instances)
 - [x] ADR-009: Multi-tenant isolation via Postgres RLS + app-layer scoping
 - [x] ADR-010: Event table partitioning strategy and retention window
 - [x] ADR-011: Object storage for large payloads, threshold and content-addressing

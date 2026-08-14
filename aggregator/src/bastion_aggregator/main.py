@@ -66,6 +66,7 @@ from .graph import STATUS_FOR_EVENT_TYPE, fold_events_to_graph
 from .human_auth import AuthenticatedUser, authenticate_user, decode_bearer_token
 from .kafka_consumer import KafkaEventConsumer
 from .logging import configure_logging, log
+from .redis_bus import redis_bus
 from .ws import manager as ws_manager
 
 configure_logging()
@@ -163,11 +164,17 @@ async def _handle_notification(data: dict[str, Any]) -> None:
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     await db.connect()
+    # U11 (v2 upgrade): ws.py's ConnectionManager publishes/subscribes
+    # through this — must be connected before kafka_consumer.start() below,
+    # since a notification can arrive (and call ws_manager.broadcast(),
+    # which publishes) as soon as the consumer starts.
+    await redis_bus.connect()
     await kafka_consumer.start(_handle_notification)
     try:
         yield
     finally:
         await kafka_consumer.stop()
+        await redis_bus.close()
         await db.close()
 
 

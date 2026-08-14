@@ -22,6 +22,13 @@ class Config:
     # U9 (v2 upgrade), UPGRADE_ARCHITECTURE.md §11 — same reasoning as
     # interceptor/config.py's field of the same name.
     db_query_timeout_seconds: float
+    # U11 (v2 upgrade), UPGRADE_ARCHITECTURE.md §13's backpressure section:
+    # multiple updates to the same node within this window collapse to a
+    # single delivered message (the latest state) — tunable, per the spec's
+    # explicit request. 0 disables coalescing entirely (deliver
+    # immediately, one message per update) — what every existing exact-
+    # sequence test in this suite that predates U11 uses.
+    ws_batch_window_seconds: float
 
 
 def load_config() -> Config:
@@ -37,6 +44,7 @@ def load_config() -> Config:
         ),
         kafka_bootstrap_servers=os.environ.get("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092"),
         db_query_timeout_seconds=float(os.environ.get("DB_QUERY_TIMEOUT_SECONDS", "30")),
+        ws_batch_window_seconds=float(os.environ.get("WS_BATCH_WINDOW_SECONDS", "0.1")),
     )
 
 

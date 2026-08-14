@@ -266,8 +266,17 @@ filters aren't implemented yet.
 
 ### `WS /live/{agent_id}`
 Served by the aggregator. Frontend subscribes here for live graph deltas while an agent is
-actively running — pushed straight from the same Postgres LISTEN/NOTIFY handler that
-updates `active_traces` (ARCHITECTURE.md §14), no polling on either side.
+actively running — pushed via the aggregator's Kafka consumer (U3, v2 upgrade, replacing v1's
+Postgres LISTEN/NOTIFY) fanned out through Redis pub/sub (U11, v2 upgrade, `docs/adr/ADR-008`) so
+any WS gateway instance can deliver to any connected client, not only the one that happened to
+process the underlying Kafka message. No polling on either side.
+
+Multiple updates to the same node arriving within a short coalescing window (default 100ms,
+`WS_BATCH_WINDOW_SECONDS`, tunable) collapse to just the latest — a burst of rapid status changes
+for one node is delivered as its final state once the window flushes, not as N separate messages.
+`node_added`/`edge_added` are structural facts and are never coalesced. The wire format itself is
+unchanged either way — still one JSON object per `send_json()` call, coalescing only reduces
+message *count* during a burst, never message *shape*.
 
 Auth via **`?token=<access token>`** query param, not an `Authorization` header — a browser's
 WebSocket API doesn't let JS set custom headers on the handshake. Connection is closed with

@@ -16,6 +16,7 @@ import pytest
 import pytest_asyncio
 from bastion_aggregator.db import db
 from bastion_aggregator.main import _handle_notification, kafka_consumer
+from bastion_aggregator.redis_bus import redis_bus as aggregator_redis_bus
 from bastion_interceptor.db import db as interceptor_db
 from bastion_interceptor.human_auth import hash_password
 from bastion_interceptor.main import app as interceptor_app
@@ -70,7 +71,22 @@ async def _interceptor_connected(_migrated_database: None) -> AsyncIterator[None
 
 
 @pytest_asyncio.fixture(scope="session", autouse=True)
-async def _event_pipeline(_db_pool: None, _interceptor_connected: None) -> AsyncIterator[None]:
+async def _aggregator_redis_connected() -> AsyncIterator[None]:
+    """U11 (v2 upgrade): ws.py's ConnectionManager publishes/subscribes
+    through this — main.py's lifespan normally connects it, but tests
+    drive the ASGI app via httpx.ASGITransport, which doesn't trigger
+    lifespan events (same reasoning as _db_pool above)."""
+    await aggregator_redis_bus.connect()
+    try:
+        yield
+    finally:
+        await aggregator_redis_bus.close()
+
+
+@pytest_asyncio.fixture(scope="session", autouse=True)
+async def _event_pipeline(
+    _db_pool: None, _interceptor_connected: None, _aggregator_redis_connected: None
+) -> AsyncIterator[None]:
     """U3 (v2 upgrade): the real production pipeline, not a test shortcut —
     interceptor writes events + outbox rows, the outbox publisher ships
     them to Kafka, the aggregator's Kafka consumer calls

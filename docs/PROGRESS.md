@@ -781,7 +781,7 @@ Target architecture: `UPGRADE_ARCHITECTURE.md`. Target frontend: `FRONTEND_V2.md
 file before starting (migrations 0001–0006 present, 67 tests passing, live on Render, aggregator
 confirmed still on Postgres LISTEN/NOTIFY per v1 design) — no mismatch found.
 
-**Current phase**: U1–U10 complete (U10 as a deferral decision, not infrastructure — see below), U11 next.
+**Current phase**: U1–U11 complete (U10 as a deferral decision, not infrastructure), U12 next.
 
 ### Phase status
 - **U1 — Explicit state machine: done.** `shared/src/bastion_shared/call_state.py` — `CallState` enum
@@ -1053,7 +1053,41 @@ confirmed still on Postgres LISTEN/NOTIFY per v1 design) — no mismatch found.
   the candidate routing policy (trace/replay/analytics reads only, never writes or strongly-consistent
   reads like approval resolution) now, with no replica added and no fabricated numbers. Revisit once
   U13 actually runs.
-- U11–U16: not started.
+- **U11 — Realtime fan-out at scale: done.** v1's `ConnectionManager` (`aggregator/ws.py`) was a bare
+  in-process `dict[agent_id, set[WebSocket]]`, broadcasting by directly iterating local connections —
+  correct for exactly one process, silently wrong (client on a second instance simply never receives
+  anything, no error) the moment there's a second WS gateway, exactly the gap UPGRADE_ARCHITECTURE.md
+  §13 names directly. New `aggregator/redis_bus.py` (mirrors the interceptor's own, same RESP2-pinning
+  fix); `ConnectionManager.broadcast()` now only publishes to `bastion:ws:{agent_id}` — a per-agent
+  `_subscribe_loop` task is the *only* path that ever delivers to local connections, on this instance
+  or any other, so "any gateway can serve any client" is a property of the code path, not an
+  aspiration. Proven directly with two genuinely independent `ConnectionManager` instances (zero
+  shared Python state, connected only through real Redis — the same pattern already used for U3's
+  Kafka multi-consumer proofs), not just designed and assumed to work.
+
+  **Backpressure**: `_enqueue` coalesces multiple `NodeUpdatedMessage`s for the same `span_id` within
+  a tunable window (default 100ms, `WS_BATCH_WINDOW_SECONDS`) into just the latest —
+  `NodeAddedMessage`/`EdgeAddedMessage` are structural, never coalesced. Wire format unchanged
+  (still one JSON object per send); coalescing reduces message *count* under a burst, not *shape*.
+
+  **Real bug found while writing the milestone test itself, not a hypothetical**: enabling the
+  default 100ms coalescing window broke `test_two_viewers_see_identical_live_updates_with_no_polling`
+  (pre-existing, U6-era) — the test's own real timing let two `node_updated` messages (allowed→
+  completed) for the same span land within the window and correctly coalesce, which then made its
+  third `receive_json()` call hang forever waiting for a message that had been legitimately merged
+  away. Diagnosed via debug tracing (confirmed the subscribe loop *did* receive all 3 raw messages —
+  the coalescing, not a broken pub/sub mechanism, was the cause), not silently patched around by
+  guessing. Fixed correctly: three pre-U11 exact-sequence WS tests now explicitly opt out of
+  coalescing (`_no_coalescing()` helper, `manager._batch_window_seconds = 0`) since testing exact
+  per-message delivery is a different, still-valid concern from U11's own burst-tolerance milestone.
+  Milestone tests (`aggregator/tests/test_ws_fanout.py`, 2 cases):
+  `test_broadcast_from_one_gateway_reaches_clients_on_both` (published via gateway 1, received by a
+  client connected only to gateway 2) and
+  `test_burst_of_rapid_updates_coalesces_and_measures_propagation_latency` (200 rapid updates to one
+  node deliver as far fewer than 200 messages, correct final state, propagation latency bounded by
+  the coalescing window rather than growing with burst size) — both passed after the coalescing fix
+  above. Full workspace suite: 209 passed. ADR-008 written.
+- U12–U16: not started.
 
 ### ADR checklist (mirrors `ADR_INDEX.md`)
 - [x] ADR-001: PostgreSQL as source of truth — `docs/adr/ADR-001-...md`.

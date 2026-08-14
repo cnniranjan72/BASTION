@@ -20,9 +20,28 @@ import httpx
 from bastion import BastionClient
 from bastion_aggregator.db import db
 from bastion_aggregator.main import app as aggregator_app
+from bastion_aggregator.ws import manager as ws_manager
 from bastion_interceptor.main import app as interceptor_app
 from httpx_ws import aconnect_ws
 from httpx_ws.transport import ASGIWebSocketTransport
+
+
+@contextlib.asynccontextmanager
+async def _no_coalescing():
+    """U11 (v2 upgrade): the module-level `manager` singleton coalesces
+    multiple updates to the same node within its batch window by default
+    (config.ws_batch_window_seconds, 100ms) — see ws.py. This test cares
+    about exact per-message sequencing (a real, pre-U11 milestone in its
+    own right), which coalescing would otherwise legitimately collapse if
+    two updates for the same span land within the window — a real,
+    intended behavior for a burst, not something to work around by relying
+    on real timing staying just barely outside the window."""
+    original = ws_manager._batch_window_seconds
+    ws_manager._batch_window_seconds = 0
+    try:
+        yield
+    finally:
+        ws_manager._batch_window_seconds = original
 
 
 def _bastion_client(agent_id: UUID, raw_key: str) -> BastionClient:
@@ -49,6 +68,7 @@ async def test_two_viewers_see_identical_live_updates_with_no_polling(
 
     transport = ASGIWebSocketTransport(app=aggregator_app)
     async with (
+        _no_coalescing(),
         httpx.AsyncClient(transport=transport, base_url="http://aggregator.test") as client_a,
         httpx.AsyncClient(transport=transport, base_url="http://aggregator.test") as client_b,
         aconnect_ws(f"/live/{agent_id}?token={login_a['access_token']}", client_a) as ws_a,
@@ -115,6 +135,7 @@ async def test_blocked_call_delta_includes_the_block_reason(
 
     transport = ASGIWebSocketTransport(app=aggregator_app)
     async with (
+        _no_coalescing(),
         httpx.AsyncClient(transport=transport, base_url="http://aggregator.test") as client_ws,
         aconnect_ws(f"/live/{agent_id}?token={viewer_login['access_token']}", client_ws) as ws,
     ):
