@@ -18,6 +18,15 @@ from .auth_api import (
     SignupRequest,
     TokenPairResponse,
 )
+from .call_state import (
+    TERMINAL_STATES,
+    CallState,
+    IllegalStateTransition,
+    guard_event,
+    is_terminal,
+    state_for_event,
+    transition,
+)
 from .errors import BastionError, ErrorDetail, ErrorResponse
 from .events import (
     CallAttemptedPayload,
@@ -57,6 +66,13 @@ from .users_api import CreateUserRequest, CreateUserResponse, UpdateUserRoleRequ
 
 __all__ = [
     "AgentResponse",
+    "TERMINAL_STATES",
+    "CallState",
+    "IllegalStateTransition",
+    "guard_event",
+    "is_terminal",
+    "state_for_event",
+    "transition",
     "ApiTokenResponse",
     "CreateApiTokenRequest",
     "CreateApiTokenResponse",

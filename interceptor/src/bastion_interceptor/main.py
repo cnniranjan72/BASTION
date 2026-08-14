@@ -49,6 +49,7 @@ from bastion_shared import (
     ApprovalRequestResponse,
     CallAttemptedPayload,
     CallOutcomePayload,
+    CallState,
     ChangePasswordRequest,
     CompleteSpanRequest,
     CompleteSpanResponse,
@@ -60,6 +61,7 @@ from bastion_shared import (
     CreateUserRequest,
     CreateUserResponse,
     EventType,
+    IllegalStateTransition,
     InterceptAllowedResponse,
     InterceptBlockedResponse,
     InterceptPendingResponse,
@@ -76,6 +78,8 @@ from bastion_shared import (
     UserResponse,
     UserRole,
     encode_access_token,
+    guard_event,
+    state_for_event,
 )
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.exceptions import RequestValidationError
@@ -435,6 +439,10 @@ async def _intercept(
 
     span_id = uuid.uuid4()
 
+    # U1: every call-status transition goes through the state machine
+    # (CLAUDE_UPGRADE.md rule #3) — `state` tracks this span's CallState
+    # procedurally through the function, guarded before each event write.
+    state = guard_event(CallState.CREATED, EventType.CALL_ATTEMPTED)
     await db.insert_event(
         trace_id=body.trace_id,
         span_id=span_id,
@@ -449,6 +457,7 @@ async def _intercept(
     policy_id = compiled_policy.policy_id if compiled_policy is not None else None
 
     if decision.action == "require_approval":
+        guard_event(state, EventType.CALL_PENDING_APPROVAL)
         await db.insert_event(
             trace_id=body.trace_id,
             span_id=span_id,
@@ -470,6 +479,7 @@ async def _intercept(
 
     if decision.action == "block":
         reason = decision.reason or "blocked by policy"
+        guard_event(state, EventType.CALL_BLOCKED)
         await db.insert_event(
             trace_id=body.trace_id,
             span_id=span_id,
@@ -484,6 +494,7 @@ async def _intercept(
         policy_decisions_total.labels(decision="blocked").inc()
         return InterceptBlockedResponse(span_id=span_id, policy_id=policy_id, reason=reason)
 
+    guard_event(state, EventType.CALL_ALLOWED)
     await db.insert_event(
         trace_id=body.trace_id,
         span_id=span_id,
@@ -529,9 +540,17 @@ async def complete_span(
                 }
             },
         )
-    # ApprovalGranted is the "allowed" outcome for a span resolved via the
-    # approval flow (Phase 3) — it never gets its own separate CallAllowed.
-    if span["event_type"] not in (EventType.CALL_ALLOWED.value, EventType.APPROVAL_GRANTED.value):
+    # U1: the state machine is the actual authority on whether this span
+    # can be completed — replaces the old manual
+    # `event_type not in (CALL_ALLOWED, APPROVAL_GRANTED)` check with the
+    # same guard every other transition goes through. ApprovalGranted maps
+    # to CallState.ALLOWED (see call_state.py) — a span resolved via the
+    # approval flow never gets its own separate CallAllowed (Phase 3).
+    current_state = state_for_event(EventType(span["event_type"]))
+    event_type = EventType.CALL_COMPLETED if body.status == "completed" else EventType.CALL_FAILED
+    try:
+        guard_event(current_state, event_type)
+    except IllegalStateTransition as exc:
         raise HTTPException(
             status_code=409,
             detail={
@@ -541,9 +560,8 @@ async def complete_span(
                     "request_id": request.state.request_id,
                 }
             },
-        )
+        ) from exc
 
-    event_type = EventType.CALL_COMPLETED if body.status == "completed" else EventType.CALL_FAILED
     await db.insert_event(
         trace_id=span["trace_id"],
         span_id=span_id,
@@ -889,6 +907,12 @@ _APPROVAL_EVENT_DECISION: dict[EventType, Literal["allowed", "blocked"]] = {
 async def _emit_approval_resolution_event(
     record: Any, event_type: EventType, reason: str | None
 ) -> None:
+    # U1: db.resolve_approval/expire_stale_approval's own atomic
+    # `WHERE status = 'pending'` already guarantees this call is currently
+    # PENDING_APPROVAL by the time either caller reaches here — guard_event
+    # makes that guarantee explicit and machine-checked rather than only
+    # implied by the SQL, per CLAUDE_UPGRADE.md rule #3.
+    guard_event(CallState.PENDING_APPROVAL, event_type)
     lineage = await db.get_span_lineage(record["span_id"])
     if lineage is None:
         return

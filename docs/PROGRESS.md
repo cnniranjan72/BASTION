@@ -774,7 +774,37 @@ usability fixes + personal API tokens + Account page, and now a live Render depl
     didn't work here) was never found — worth a support ticket to Render if it matters later (e.g. for
     latency), but the public-URL workaround is a legitimate permanent architecture, not just a stopgap.
 
-## Known deviations from BUILD_PLAN.md
+## v2 Upgrade
+
+Target architecture: `UPGRADE_ARCHITECTURE.md`. Target frontend: `FRONTEND_V2.md`. Phase order:
+`UPGRADE_BUILD_PLAN.md` (U1–U16). Standing rules: `CLAUDE_UPGRADE.md`. v1 state verified against this
+file before starting (migrations 0001–0006 present, 67 tests passing, live on Render, aggregator
+confirmed still on Postgres LISTEN/NOTIFY per v1 design) — no mismatch found.
+
+**Current phase**: U1 complete, U2 in progress.
+
+### Phase status
+- **U1 — Explicit state machine: done.** `shared/src/bastion_shared/call_state.py` — `CallState` enum
+  matching the §2 diagram, pure `transition()` table, `guard_event()` bridging v1's real `EventType`
+  vocabulary onto it. Wired into every event-writing path in `interceptor/main.py`
+  (`/intercept`, `/spans/{id}/complete`, approval grant/deny, approval timeout) — replaces the one
+  ad-hoc check that existed (`/spans/{id}/complete`'s manual `event_type not in (...)`) with the same
+  mechanism every transition now goes through. Milestone test: `shared/tests/test_call_state.py`, 95
+  cases, exhaustive over the full state × state matrix (every legal edge, every illegal pair, every
+  terminal state rejecting everything) — passing. Full workspace suite: 162 passed (was 67; +95 new).
+  ADR-017 written (not in the required index — TERMINAL/APPROVED modeling decision, flagged as
+  ADR-worthy per `ADR_INDEX.md`'s "add new ADRs as new non-obvious decisions get made").
+- **U2 — Idempotency**: in progress.
+- U3–U16: not started.
+
+### ADR checklist (mirrors `ADR_INDEX.md`)
+- [ ] ADR-001 through ADR-016: not yet written (scheduled for the phases that produce them per
+  `UPGRADE_BUILD_PLAN.md` — e.g. ADR-004/005 land with U2, ADR-001/002/003/014 with U3).
+- [x] ADR-017 (unlisted, added this phase): call state machine modeling — see
+  `docs/adr/ADR-017-call-state-machine-modeling.md`.
+
+### Chaos / load test status
+Not started (U13/U14).
 - None in phase *order*. Implementation-level deviations from the original spec docs, all flagged in
   code/API_SPEC.md/ARCHITECTURE.md rather than silently guessed: (1) interceptor language (Phase 0,
   §7), (2) interceptor doesn't proxy the real downstream call, the SDK does (Phase 1, §8), (3)
