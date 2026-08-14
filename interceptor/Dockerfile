@@ -39,10 +39,14 @@ COPY --from=builder /app/interceptor /app/interceptor
 # .pem files themselves are never copied in (.dockerignore).
 COPY infra/db/ infra/db/
 COPY infra/keys/generate_dev_keys.py infra/keys/generate_dev_keys.py
+COPY interceptor/docker-entrypoint.sh /docker-entrypoint.sh
+RUN chmod +x /docker-entrypoint.sh
 # infra/keys is where the jwtkeys named volume gets mounted (docker-compose)
 # — chown it to the non-root user *before* that mount happens, so Docker's
 # first-mount copy of this directory's permissions into the new volume
-# lets `bastion` actually write the generated keys there.
+# lets `bastion` actually write the generated keys there. Also where
+# docker-entrypoint.sh writes JWT_*_KEY_PEM env vars out to files, when a
+# deploy target (Render) has no shared volume at all.
 RUN chown -R bastion:bastion /app/infra/keys
 
 ENV PATH="/app/.venv/bin:$PATH" \
@@ -54,4 +58,4 @@ EXPOSE 4001
 HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=5 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:4001/healthz')" || exit 1
 
-CMD ["uvicorn", "bastion_interceptor.main:app", "--host", "0.0.0.0", "--port", "4001"]
+ENTRYPOINT ["/docker-entrypoint.sh"]
