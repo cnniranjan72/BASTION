@@ -138,8 +138,8 @@ services:
     container_name: bastion-frontend
     restart: unless-stopped
     environment:
-      INTERCEPTOR_UPSTREAM: interceptor:4001
-      AGGREGATOR_UPSTREAM: aggregator:4002
+      INTERCEPTOR_UPSTREAM: http://interceptor:4001
+      AGGREGATOR_UPSTREAM: http://aggregator:4002
     ports:
       - '8080:8080'
     depends_on:

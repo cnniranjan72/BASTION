@@ -9,5 +9,5 @@ metadata:
 data:
   JWT_PRIVATE_KEY_PATH: /etc/bastion/keys/jwt_private.pem
   JWT_PUBLIC_KEY_PATH: /etc/bastion/keys/jwt_public.pem
-  INTERCEPTOR_UPSTREAM: bastion-interceptor:4001
-  AGGREGATOR_UPSTREAM: bastion-aggregator:4002
+  INTERCEPTOR_UPSTREAM: http://bastion-interceptor:4001
+  AGGREGATOR_UPSTREAM: http://bastion-aggregator:4002
