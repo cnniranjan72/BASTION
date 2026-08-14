@@ -781,7 +781,7 @@ Target architecture: `UPGRADE_ARCHITECTURE.md`. Target frontend: `FRONTEND_V2.md
 file before starting (migrations 0001–0006 present, 67 tests passing, live on Render, aggregator
 confirmed still on Postgres LISTEN/NOTIFY per v1 design) — no mismatch found.
 
-**Current phase**: U1–U4 complete, U5 next.
+**Current phase**: U1–U5 complete, U6 next.
 
 ### Phase status
 - **U1 — Explicit state machine: done.** `shared/src/bastion_shared/call_state.py` — `CallState` enum
@@ -861,6 +861,15 @@ confirmed still on Postgres LISTEN/NOTIFY per v1 design) — no mismatch found.
   traceback despite repeated attempts. Likely transient local resource contention, not a deterministic
   logic bug, but recorded honestly as unconfirmed rather than claimed fixed.
 
+  **Update, U5**: reproduced again in a full-suite run (unrelated to U4/U5's changes — neither
+  touches approval-flow or span-complete code, and it passed cleanly 4/4 in isolation immediately
+  after), this time with a traceback finally caught: `httpx.HTTPStatusError: Client error '404 Not
+  Found'` on `POST /spans/{span_id}/complete`, called by the SDK's `client.call()` right after the
+  test's own `POST /approvals/{id}/approve` returned 200. Still not root-caused — worth checking
+  first, next time it's chased, whether it's a genuine race between the approval-resolution event
+  write and the span lookup `/spans/{id}/complete` depends on, rather than pure resource contention
+  as originally assumed. Not blocking U5's completion; flagged for a future session.
+
   **Second open item, found while confirming the full suite before committing U3**:
   `aggregator/tests/test_live_ws.py` errored (not failed — during fixture setup) on 2 of 2
   consecutive full-suite runs, each time a raw `ConnectionResetError: [WinError 64] The specified
@@ -894,7 +903,22 @@ confirmed still on Postgres LISTEN/NOTIFY per v1 design) — no mismatch found.
   version persisted — passed on first run. Two more tests cover backward compatibility (no
   `based_on_version` → old behavior unchanged) and the successful non-conflicting case. `API_SPEC.md`
   updated. ADR-016 written.
-- U5–U16: not started.
+- **U5 — Policy distribution correctness: done.** `policy_reconciler.py`'s `PolicyReconciler` runs a
+  full sweep every `POLICY_RECONCILIATION_INTERVAL_SECONDS` (default 30s; tests use a short interval
+  directly, not the app default), comparing every active policy in Postgres against each instance's
+  in-memory `PolicyCache` and self-healing both directions of drift: a missed update (compile+put,
+  same code path the Redis listener's `_reload_policy_set` already uses) and a missed deactivation
+  (evict, via new `PolicyCache.cached_set_ids()`). Wired into `main.py`'s `lifespan` alongside — not
+  instead of — the existing Redis pub/sub hot-reload listener; pub/sub stays the fast path, this is
+  purely the backstop for whatever it misses. Milestone test
+  (`interceptor/tests/test_policy_reconciliation.py`,
+  `test_reconciliation_heals_a_missed_pubsub_broadcast`): activates a new policy version by calling
+  `db.activate_policy` directly (bypassing the broadcast entirely, simulating a dropped pub/sub
+  message), confirms the cache is genuinely stale, then asserts a running `PolicyReconciler`
+  converges it within its interval — passed on first run. Two more tests cover `reconcile_once()`
+  directly (non-timing-dependent): healing a drifted entry and evicting one no longer active
+  anywhere. ADR-007 written.
+- U6–U16: not started.
 
 ### ADR checklist (mirrors `ADR_INDEX.md`)
 - [x] ADR-001: PostgreSQL as source of truth — `docs/adr/ADR-001-...md`.
@@ -903,8 +927,9 @@ confirmed still on Postgres LISTEN/NOTIFY per v1 design) — no mismatch found.
 - [x] ADR-004: at-least-once delivery + idempotent processing — `docs/adr/ADR-004-...md`.
 - [x] ADR-005: idempotency key design and enforcement — `docs/adr/ADR-005-...md`.
 - [x] ADR-014: Kafka partitioning key and ordering guarantees — `docs/adr/ADR-014-...md`.
+- [x] ADR-007: policy distribution — eventual consistency + reconciliation loop — `docs/adr/ADR-007-...md`.
 - [x] ADR-016: optimistic concurrency for policy edits — `docs/adr/ADR-016-...md`.
-- [ ] ADR-006–013, 015: not yet written (scheduled for the phases that produce them per
+- [ ] ADR-006, 008–013, 015: not yet written (scheduled for the phases that produce them per
   `UPGRADE_BUILD_PLAN.md`).
 - [x] ADR-017 (unlisted, added U1): call state machine modeling — see
   `docs/adr/ADR-017-call-state-machine-modeling.md`.

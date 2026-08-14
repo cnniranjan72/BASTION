@@ -33,6 +33,11 @@ class Config:
     # to this — the interceptor's own hot path never touches Kafka
     # directly (§4.2: Kafka is distribution, not on the critical write path).
     kafka_bootstrap_servers: str
+    # U5 (v2 upgrade), UPGRADE_ARCHITECTURE.md §6's reconciliation loop: how
+    # often this instance re-checks its cached policy versions against
+    # Postgres, self-healing any drift from a missed Redis pub/sub message.
+    # Bounds the worst-case staleness window after a missed broadcast.
+    policy_reconciliation_interval_seconds: float
 
 
 def load_config() -> Config:
@@ -53,6 +58,9 @@ def load_config() -> Config:
         ),
         refresh_token_ttl_days=int(os.environ.get("REFRESH_TOKEN_TTL_DAYS", "30")),
         kafka_bootstrap_servers=os.environ.get("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092"),
+        policy_reconciliation_interval_seconds=float(
+            os.environ.get("POLICY_RECONCILIATION_INTERVAL_SECONDS", "30")
+        ),
     )
 
 

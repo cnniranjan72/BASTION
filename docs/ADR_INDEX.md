@@ -8,7 +8,7 @@ Each of these must exist as its own file under `docs/adr/` before Phase 9 (v2) i
 - [x] ADR-004: At-least-once delivery + idempotent processing (effective exactly-once outcome)
 - [x] ADR-005: Idempotency key design and enforcement
 - [ ] ADR-006: Redis as policy cache (ephemeral, not authoritative)
-- [ ] ADR-007: Policy distribution — eventual consistency + reconciliation loop
+- [x] ADR-007: Policy distribution — eventual consistency + reconciliation loop
 - [ ] ADR-008: WebSocket fan-out architecture (Redis pub/sub across gateway instances)
 - [ ] ADR-009: Multi-tenant isolation via Postgres RLS + app-layer scoping
 - [ ] ADR-010: Event table partitioning strategy and retention window

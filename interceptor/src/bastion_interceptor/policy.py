@@ -196,6 +196,14 @@ class PolicyCache:
     def evict(self, policy_set_id: UUID) -> None:
         self._by_set.pop(policy_set_id, None)
 
+    def cached_set_ids(self) -> set[UUID]:
+        """U5 (v2 upgrade): lets the reconciliation loop (policy_reconciler.py)
+        find entries that are cached here but no longer active in Postgres —
+        a plain `get` per known-active set can't detect that direction of
+        drift on its own, since it never even looks at what's cached for a
+        set Postgres no longer considers active."""
+        return set(self._by_set.keys())
+
     def __len__(self) -> int:
         return len(self._by_set)
 

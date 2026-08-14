@@ -101,6 +101,7 @@ from .human_auth import (
 )
 from .logging import configure_logging, log
 from .metrics import intercept_latency_seconds, policy_decisions_total
+from .policy_reconciler import PolicyReconciler
 from .redis_bus import redis_bus
 
 STATIC_DIR = Path(__file__).resolve().parent.parent.parent / "static"
@@ -157,6 +158,9 @@ async def _reload_policy_set(policy_set_id: UUID) -> None:
     log.info("policy cache reloaded", policy_set_id=str(policy_set_id), policy_id=str(record["id"]))
 
 
+policy_reconciler = PolicyReconciler(interval_seconds=config.policy_reconciliation_interval_seconds)
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     await db.connect()
@@ -168,9 +172,13 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         policy_engine.policy_cache.put(compiled)
     log.info("policy cache bootstrapped", count=len(policy_engine.policy_cache))
     await redis_bus.start_policy_listener(_reload_policy_set)
+    # U5 (v2 upgrade): the pub/sub listener above is the fast path; this is
+    # the backstop for whatever it misses (UPGRADE_ARCHITECTURE.md §6).
+    policy_reconciler.start()
     try:
         yield
     finally:
+        await policy_reconciler.stop()
         await redis_bus.close()
         await db.close()
 
