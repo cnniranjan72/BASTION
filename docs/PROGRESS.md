@@ -1,7 +1,8 @@
 # BASTION — Progress Log
 
-## Status: Phase 9 complete
-Phase: 9 (production polish) → next up: final documentation set (README, API docs, SETUP.md)
+## Status: build complete
+All of `docs/BUILD_PLAN.md` (Phases 0-9) plus the final documentation set are done. Nothing currently
+in progress.
 
 ## Log
 - [2026-08-14] Project specced out (PRD, ARCHITECTURE, DATA_MODEL, AUTH, API_SPEC, BUILD_PLAN written). No code yet.
@@ -46,7 +47,7 @@ Phase: 9 (production polish) → next up: final documentation set (README, API d
   - **Per-trace sequence numbers under concurrency**: `bastion_next_sequence_number(trace_id)` Postgres
     function using a transaction-scoped advisory lock (`pg_advisory_xact_lock(hashtextextended(...))`)
     so same-trace inserts serialize while different-trace inserts never contend. Backstopped by a
-    `UNIQUE (trace_id, sequence_number)` constraint. Full reasoning in `docs/ARCHITECTURE.md` §9.
+    `UNIQUE (trace_id, sequence_number)` constraint. Full reasoning in `docs/ARCHITECTURE.md` §12.
   - **Spec deviation, flagged and resolved**: ARCHITECTURE.md §2.2 describes the interceptor itself
     executing the real downstream call when a call is allowed, but neither `InterceptRequest` nor
     DATA_MODEL.md gives it anything to reach a downstream system with. Decision: the interceptor
@@ -431,14 +432,46 @@ Phase: 9 (production polish) → next up: final documentation set (README, API d
   - Full 45-test workspace suite passes, `ruff`/`mypy --strict` clean, frontend `typecheck`/`lint`
     reconfirmed clean too (no frontend code changed this phase, checked anyway).
 
+- [2026-08-14] Final documentation set complete:
+  - **Generated API docs + drift check** (`docs/api/`): pulled real `openapi.json` from both running
+    services and diffed against the hand-written `docs/API_SPEC.md`. Found and fixed real drift, not
+    hypothetical: (1) `API_SPEC.md` documented a `Base URL: /api/v1` prefix that was **never actually
+    implemented** — every real endpoint is served bare-path, confirmed by `grep`ing both services'
+    source for zero matches on `api/v1`. This had been wrong since the spec was first written and never
+    reconciled against the code. (2) The WS `node_updated` example was missing the `reason` field added
+    in Phase 8. (3) WebSocket routes are structurally invisible to OpenAPI (no representation for them
+    in the spec format), documented as a permanent limitation of "generate docs from code" for this
+    project, not something a script could ever close. Full writeup: `docs/api/DRIFT.md`.
+  - **`docs/decisions.md`**: a one-file scannable index of every numbered `ARCHITECTURE.md` decision
+    (§7-§19), one paragraph each. Caught one more small thing while building it: a stale cross-reference
+    in this very file (Phase 1's log pointed at "§9" for the sequence-number reasoning; the actual
+    section is §12) — fixed.
+  - **`infra/db/seed_dev.py`**: a real gap closed, not just documented — the base demo org + owner login
+    had been improvised ad hoc via inline Python twice this session (once before this log started
+    tracking it in detail, once again after a `docker compose down -v` wiped it) with no reusable
+    script, unlike `demo-agent/demo_agent/seed.py`'s dedicated scenario setup. `SETUP.md` needed this to
+    give a genuinely copy-pasteable path from a fresh checkout to a working login, so it exists now.
+  - **`SETUP.md`**: all three run modes (native dev, full Docker Compose, `kind`) as copy-pasteable
+    command blocks, re-verified against the running system while writing this, not just assumed correct
+    from memory of running them earlier in Phase 9. Includes a troubleshooting section covering the
+    real issues actually hit this session (the Redis port collision, the per-package async loop-scope
+    setting, the `kind` `ImagePullBackOff` gotcha) rather than generic advice.
+  - **`CONTRIBUTING.md`**: judged relevant despite this being a solo build — restates the standing
+    engineering rules from `docs/CLAUDE.md` as durable guidance for any future change, not boilerplate
+    "how to submit a PR." Deliberately didn't fabricate a security-disclosure contact channel that
+    doesn't exist.
+  - **`README.md`**: full rewrite from the Phase 0 placeholder. Real load-test numbers front and center
+    (not just a claim — the actual three-run table from `infra/load-test/README.md`), an architecture
+    diagram (Mermaid — rendered and visually verified before committing, not assumed to be valid syntax),
+    the PRD's "why now" pitch condensed, and the prompt-injection demo as the lead example with the
+    exact commands to reproduce it. Cross-checked one factual claim before publishing: BUILD_PLAN.md has
+    Phases 0 through 9 (ten phases, zero-indexed), not nine — corrected before this went in, not after.
+
 ## Next up
-- Final documentation set: README.md (with the real load-test numbers from `infra/load-test/README.md`
-  front and center, an architecture diagram, the "why now" story), generated API docs (flagging
-  API_SPEC.md drift — including the frontend `types.ts` hand-written-mirror gap from Phase 7), SETUP.md,
-  CONTRIBUTING.md if relevant, docs/decisions.md.
-- Worth resetting/isolating the dev Postgres before anything latency-sensitive in the future (still
-  true, carried over from Phase 8's note) — thousands of accumulated `test-org-*` rows from every
-  phase's test runs share the same dev DB.
+- Nothing currently planned. If resumed: worth resetting/isolating the dev Postgres before anything
+  latency-sensitive (thousands of accumulated `test-org-*` rows from every phase's test runs share the
+  same dev DB) and building the CI-gated version of the API drift check `docs/api/DRIFT.md` describes
+  but doesn't implement.
 
 ## Known deviations from BUILD_PLAN.md
 - None in phase *order*. Implementation-level deviations from the original spec docs, all flagged in

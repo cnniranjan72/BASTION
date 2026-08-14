@@ -1,0 +1,515 @@
+{
+    "openapi": "3.1.0",
+    "info": {
+        "title": "bastion-aggregator",
+        "version": "0.0.0"
+    },
+    "paths": {
+        "/healthz": {
+            "get": {
+                "summary": "Healthz",
+                "operationId": "healthz_healthz_get",
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "additionalProperties": {
+                                        "type": "string"
+                                    },
+                                    "type": "object",
+                                    "title": "Response Healthz Healthz Get"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/traces/{trace_id}": {
+            "get": {
+                "summary": "Get Trace",
+                "description": "Full replay: trace_summaries.graph_snapshot if a persisted projection\nexists (fast path), else folds `events` fresh \u00e2\u20ac\u201d covers active/in-progress\ntraces and demonstrates the event-sourcing discipline (current state is\nalways derivable from `events`, the cache is a pure accelerator, not the\nsource of truth \u00e2\u20ac\u201d CLAUDE.md rule #1). A trace from another org 404s \u00e2\u20ac\u201d\nsame rationale as interceptor.py's activate_policy: don't distinguish\n\"doesn't exist\" from \"exists but isn't yours.\"",
+                "operationId": "get_trace_traces__trace_id__get",
+                "parameters": [
+                    {
+                        "name": "trace_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string",
+                            "format": "uuid",
+                            "title": "Trace Id"
+                        }
+                    },
+                    {
+                        "name": "authorization",
+                        "in": "header",
+                        "required": false,
+                        "schema": {
+                            "anyOf": [
+                                {
+                                    "type": "string"
+                                },
+                                {
+                                    "type": "null"
+                                }
+                            ],
+                            "title": "Authorization"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/TraceGraph"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/traces/{trace_id}/events": {
+            "get": {
+                "summary": "Get Trace Events",
+                "description": "Raw event list, for the 2D inspector panel (ARCHITECTURE.md \u00c2\u00a72.6).",
+                "operationId": "get_trace_events_traces__trace_id__events_get",
+                "parameters": [
+                    {
+                        "name": "trace_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string",
+                            "format": "uuid",
+                            "title": "Trace Id"
+                        }
+                    },
+                    {
+                        "name": "authorization",
+                        "in": "header",
+                        "required": false,
+                        "schema": {
+                            "anyOf": [
+                                {
+                                    "type": "string"
+                                },
+                                {
+                                    "type": "null"
+                                }
+                            ],
+                            "title": "Authorization"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "object",
+                                        "additionalProperties": true
+                                    },
+                                    "title": "Response Get Trace Events Traces  Trace Id  Events Get"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/traces": {
+            "get": {
+                "summary": "List Traces",
+                "description": "Persisted (terminal-state) traces only \u00e2\u20ac\u201d an in-progress trace has no\ntrace_summaries row yet by design (docs/ARCHITECTURE.md \u00c2\u00a714).",
+                "operationId": "list_traces_traces_get",
+                "parameters": [
+                    {
+                        "name": "authorization",
+                        "in": "header",
+                        "required": false,
+                        "schema": {
+                            "anyOf": [
+                                {
+                                    "type": "string"
+                                },
+                                {
+                                    "type": "null"
+                                }
+                            ],
+                            "title": "Authorization"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "array",
+                                    "items": {
+                                        "$ref": "#/components/schemas/TraceSummaryResponse"
+                                    },
+                                    "title": "Response List Traces Traces Get"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    },
+    "components": {
+        "schemas": {
+            "GraphEdge": {
+                "properties": {
+                    "from": {
+                        "type": "string",
+                        "format": "uuid",
+                        "title": "From"
+                    },
+                    "to": {
+                        "type": "string",
+                        "format": "uuid",
+                        "title": "To"
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "from",
+                    "to"
+                ],
+                "title": "GraphEdge"
+            },
+            "GraphNode": {
+                "properties": {
+                    "span_id": {
+                        "type": "string",
+                        "format": "uuid",
+                        "title": "Span Id"
+                    },
+                    "parent_span_id": {
+                        "anyOf": [
+                            {
+                                "type": "string",
+                                "format": "uuid"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Parent Span Id"
+                    },
+                    "tool_name": {
+                        "type": "string",
+                        "title": "Tool Name"
+                    },
+                    "status": {
+                        "type": "string",
+                        "enum": [
+                            "pending",
+                            "allowed",
+                            "blocked",
+                            "pending_approval",
+                            "completed",
+                            "failed"
+                        ],
+                        "title": "Status"
+                    },
+                    "args": {
+                        "anyOf": [
+                            {
+                                "additionalProperties": true,
+                                "type": "object"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Args"
+                    },
+                    "latency_ms": {
+                        "anyOf": [
+                            {
+                                "type": "number"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Latency Ms"
+                    },
+                    "cost": {
+                        "anyOf": [
+                            {
+                                "type": "number"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Cost"
+                    },
+                    "reason": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Reason"
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "span_id",
+                    "parent_span_id",
+                    "tool_name",
+                    "status"
+                ],
+                "title": "GraphNode"
+            },
+            "HTTPValidationError": {
+                "properties": {
+                    "detail": {
+                        "items": {
+                            "$ref": "#/components/schemas/ValidationError"
+                        },
+                        "type": "array",
+                        "title": "Detail"
+                    }
+                },
+                "type": "object",
+                "title": "HTTPValidationError"
+            },
+            "TraceGraph": {
+                "properties": {
+                    "trace_id": {
+                        "type": "string",
+                        "format": "uuid",
+                        "title": "Trace Id"
+                    },
+                    "agent_id": {
+                        "type": "string",
+                        "format": "uuid",
+                        "title": "Agent Id"
+                    },
+                    "status": {
+                        "type": "string",
+                        "enum": [
+                            "running",
+                            "completed",
+                            "failed",
+                            "had_blocks"
+                        ],
+                        "title": "Status"
+                    },
+                    "total_cost": {
+                        "type": "number",
+                        "title": "Total Cost"
+                    },
+                    "total_calls": {
+                        "type": "integer",
+                        "title": "Total Calls"
+                    },
+                    "blocked_calls": {
+                        "type": "integer",
+                        "title": "Blocked Calls"
+                    },
+                    "started_at": {
+                        "type": "string",
+                        "format": "date-time",
+                        "title": "Started At"
+                    },
+                    "ended_at": {
+                        "anyOf": [
+                            {
+                                "type": "string",
+                                "format": "date-time"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Ended At"
+                    },
+                    "nodes": {
+                        "items": {
+                            "$ref": "#/components/schemas/GraphNode"
+                        },
+                        "type": "array",
+                        "title": "Nodes"
+                    },
+                    "edges": {
+                        "items": {
+                            "$ref": "#/components/schemas/GraphEdge"
+                        },
+                        "type": "array",
+                        "title": "Edges"
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "trace_id",
+                    "agent_id",
+                    "status",
+                    "total_cost",
+                    "total_calls",
+                    "blocked_calls",
+                    "started_at",
+                    "ended_at",
+                    "nodes",
+                    "edges"
+                ],
+                "title": "TraceGraph"
+            },
+            "TraceSummaryResponse": {
+                "properties": {
+                    "trace_id": {
+                        "type": "string",
+                        "format": "uuid",
+                        "title": "Trace Id"
+                    },
+                    "agent_id": {
+                        "type": "string",
+                        "format": "uuid",
+                        "title": "Agent Id"
+                    },
+                    "status": {
+                        "type": "string",
+                        "enum": [
+                            "running",
+                            "completed",
+                            "failed",
+                            "had_blocks"
+                        ],
+                        "title": "Status"
+                    },
+                    "total_cost": {
+                        "type": "number",
+                        "title": "Total Cost"
+                    },
+                    "total_calls": {
+                        "type": "integer",
+                        "title": "Total Calls"
+                    },
+                    "blocked_calls": {
+                        "type": "integer",
+                        "title": "Blocked Calls"
+                    },
+                    "started_at": {
+                        "type": "string",
+                        "format": "date-time",
+                        "title": "Started At"
+                    },
+                    "ended_at": {
+                        "anyOf": [
+                            {
+                                "type": "string",
+                                "format": "date-time"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Ended At"
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "trace_id",
+                    "agent_id",
+                    "status",
+                    "total_cost",
+                    "total_calls",
+                    "blocked_calls",
+                    "started_at",
+                    "ended_at"
+                ],
+                "title": "TraceSummaryResponse",
+                "description": "GET /traces \u00e2\u20ac\u201d list view, no nodes/edges (that's GET /traces/{id})."
+            },
+            "ValidationError": {
+                "properties": {
+                    "loc": {
+                        "items": {
+                            "anyOf": [
+                                {
+                                    "type": "string"
+                                },
+                                {
+                                    "type": "integer"
+                                }
+                            ]
+                        },
+                        "type": "array",
+                        "title": "Location"
+                    },
+                    "msg": {
+                        "type": "string",
+                        "title": "Message"
+                    },
+                    "type": {
+                        "type": "string",
+                        "title": "Error Type"
+                    },
+                    "input": {
+                        "title": "Input"
+                    },
+                    "ctx": {
+                        "type": "object",
+                        "title": "Context"
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "loc",
+                    "msg",
+                    "type"
+                ],
+                "title": "ValidationError"
+            }
+        }
+    }
+}

@@ -1,6 +1,12 @@
 # BASTION — API Spec (v1)
 
-Base URL: `/api/v1`
+**Base URL, corrected (Phase 11 drift check)**: no `/api/v1` prefix exists anywhere in the actual
+interceptor/aggregator code — every endpoint below is served at the bare path shown (`/intercept`,
+`/approvals/{id}`, `/policies`, etc.), confirmed against both services' real routes and the generated
+OpenAPI schemas in `docs/api/`. This doc originally specced a versioned base URL that was simply never
+implemented; the frontend's dev proxy (`frontend/vite.config.ts`) and every example in this document
+already assumed the bare-path reality, so this correction changes documentation, not behavior. Path
+versioning, if ever needed, is still open — not a decision made and reversed, just never made.
 
 ## Machine API (called by the SDK, high frequency, latency-critical)
 
@@ -35,7 +41,7 @@ Called by the SDK for every tool call.
   "span_id": "uuid",
   "decision": "pending_approval",
   "approval_request_id": "uuid",
-  "poll_url": "/api/v1/approvals/{id}"
+  "poll_url": "/approvals/{id}"
 }
 ```
 **`pending_approval` never blocks this call** — see docs/ARCHITECTURE.md §13
@@ -200,9 +206,18 @@ the HTTP endpoints' 401/403.
 ```json
 // Server → client messages
 { "type": "node_added", "node": { "span_id": "...", "tool_name": "...", "status": "pending" } }
-{ "type": "node_updated", "span_id": "...", "status": "allowed", "latency_ms": 120, "cost": 0.002 }
+{ "type": "node_updated", "span_id": "...", "status": "allowed", "latency_ms": 120, "cost": 0.002, "reason": null }
+{ "type": "node_updated", "span_id": "...", "status": "blocked", "reason": "blocked by policy rule for tool 'payments.transfer'" }
 { "type": "edge_added", "from": "parent_span_id", "to": "span_id" }
 ```
+`reason` (added Phase 8, `docs/ARCHITECTURE.md` §17) carries the block/deny/failure reason for a
+`blocked`/`failed` status, `null` otherwise — the same field the replay API's `GraphNode.reason`
+already had; the live delta path was missing it until a real bug surfaced it (see §17's writeup).
+
+`GET /metrics` (both interceptor and aggregator, Phase 9) — Prometheus text-exposition format,
+`intercept_latency_seconds` and `policy_decisions_total{decision=}` on the interceptor. Deliberately
+`include_in_schema=False`, so it's absent from the generated OpenAPI docs in `docs/api/` — noted here,
+not silently missing.
 
 ## Error format (consistent across all endpoints)
 ```json

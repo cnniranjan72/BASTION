@@ -1,0 +1,1243 @@
+{
+    "openapi": "3.1.0",
+    "info": {
+        "title": "bastion-interceptor",
+        "version": "0.0.0"
+    },
+    "paths": {
+        "/healthz": {
+            "get": {
+                "summary": "Healthz",
+                "operationId": "healthz_healthz_get",
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "additionalProperties": {
+                                        "type": "string"
+                                    },
+                                    "type": "object",
+                                    "title": "Response Healthz Healthz Get"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/auth/login": {
+            "post": {
+                "summary": "Login",
+                "operationId": "login_auth_login_post",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/LoginRequest"
+                            }
+                        }
+                    },
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/TokenPairResponse"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/auth/refresh": {
+            "post": {
+                "summary": "Refresh",
+                "description": "The reuse-detection mechanism AUTH.md \u00c2\u00a72 calls \"the part interviewers\nactually probe on\": every refresh token is one-time-use. If the token\npresented here isn't the current unrevoked token for its family \u00e2\u20ac\u201d i.e.\nit was already rotated away (or the family was already revoked) \u00e2\u20ac\u201d that\ncan only mean it leaked and is being used in parallel with the\nlegitimate client. The response to that signal is to revoke the\n*entire* family, not just reject this one request.",
+                "operationId": "refresh_auth_refresh_post",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/RefreshRequest"
+                            }
+                        }
+                    },
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/TokenPairResponse"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/auth/logout": {
+            "post": {
+                "summary": "Logout",
+                "operationId": "logout_auth_logout_post",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/LogoutRequest"
+                            }
+                        }
+                    },
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "additionalProperties": {
+                                        "type": "string"
+                                    },
+                                    "type": "object",
+                                    "title": "Response Logout Auth Logout Post"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/intercept": {
+            "post": {
+                "summary": "Intercept",
+                "operationId": "intercept_intercept_post",
+                "parameters": [
+                    {
+                        "name": "authorization",
+                        "in": "header",
+                        "required": false,
+                        "schema": {
+                            "anyOf": [
+                                {
+                                    "type": "string"
+                                },
+                                {
+                                    "type": "null"
+                                }
+                            ],
+                            "title": "Authorization"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/InterceptRequest"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "anyOf": [
+                                        {
+                                            "$ref": "#/components/schemas/InterceptAllowedResponse"
+                                        },
+                                        {
+                                            "$ref": "#/components/schemas/InterceptBlockedResponse"
+                                        },
+                                        {
+                                            "$ref": "#/components/schemas/InterceptPendingResponse"
+                                        }
+                                    ],
+                                    "title": "Response Intercept Intercept Post"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/spans/{span_id}/complete": {
+            "post": {
+                "summary": "Complete Span",
+                "operationId": "complete_span_spans__span_id__complete_post",
+                "parameters": [
+                    {
+                        "name": "span_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string",
+                            "format": "uuid",
+                            "title": "Span Id"
+                        }
+                    },
+                    {
+                        "name": "authorization",
+                        "in": "header",
+                        "required": false,
+                        "schema": {
+                            "anyOf": [
+                                {
+                                    "type": "string"
+                                },
+                                {
+                                    "type": "null"
+                                }
+                            ],
+                            "title": "Authorization"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/CompleteSpanRequest"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/CompleteSpanResponse"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/policies": {
+            "post": {
+                "summary": "Create Policy",
+                "operationId": "create_policy_policies_post",
+                "parameters": [
+                    {
+                        "name": "authorization",
+                        "in": "header",
+                        "required": false,
+                        "schema": {
+                            "anyOf": [
+                                {
+                                    "type": "string"
+                                },
+                                {
+                                    "type": "null"
+                                }
+                            ],
+                            "title": "Authorization"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/CreatePolicyRequest"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "201": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/PolicyResponse"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            "get": {
+                "summary": "List Policies",
+                "operationId": "list_policies_policies_get",
+                "parameters": [
+                    {
+                        "name": "authorization",
+                        "in": "header",
+                        "required": false,
+                        "schema": {
+                            "anyOf": [
+                                {
+                                    "type": "string"
+                                },
+                                {
+                                    "type": "null"
+                                }
+                            ],
+                            "title": "Authorization"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "array",
+                                    "items": {
+                                        "$ref": "#/components/schemas/PolicyResponse"
+                                    },
+                                    "title": "Response List Policies Policies Get"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/policies/{policy_id}/activate": {
+            "post": {
+                "summary": "Activate Policy",
+                "operationId": "activate_policy_policies__policy_id__activate_post",
+                "parameters": [
+                    {
+                        "name": "policy_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string",
+                            "format": "uuid",
+                            "title": "Policy Id"
+                        }
+                    },
+                    {
+                        "name": "authorization",
+                        "in": "header",
+                        "required": false,
+                        "schema": {
+                            "anyOf": [
+                                {
+                                    "type": "string"
+                                },
+                                {
+                                    "type": "null"
+                                }
+                            ],
+                            "title": "Authorization"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/PolicyResponse"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/approvals/{approval_id}": {
+            "get": {
+                "summary": "Get Approval",
+                "description": "The SDK's actual long-poll target (not /intercept \u00e2\u20ac\u201d see module\ndocstring). Blocks up to config.approval_long_poll_seconds if still\npending, woken early by a Redis signal from approve/deny; the SDK calls\nthis in a loop until the status is no longer \"pending\" or its own\noverall budget elapses (docs/ARCHITECTURE.md's approval-flow section).",
+                "operationId": "get_approval_approvals__approval_id__get",
+                "parameters": [
+                    {
+                        "name": "approval_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string",
+                            "format": "uuid",
+                            "title": "Approval Id"
+                        }
+                    },
+                    {
+                        "name": "authorization",
+                        "in": "header",
+                        "required": false,
+                        "schema": {
+                            "anyOf": [
+                                {
+                                    "type": "string"
+                                },
+                                {
+                                    "type": "null"
+                                }
+                            ],
+                            "title": "Authorization"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ApprovalRequestResponse"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/approvals": {
+            "get": {
+                "summary": "List Pending Approvals",
+                "operationId": "list_pending_approvals_approvals_get",
+                "parameters": [
+                    {
+                        "name": "authorization",
+                        "in": "header",
+                        "required": false,
+                        "schema": {
+                            "anyOf": [
+                                {
+                                    "type": "string"
+                                },
+                                {
+                                    "type": "null"
+                                }
+                            ],
+                            "title": "Authorization"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "array",
+                                    "items": {
+                                        "$ref": "#/components/schemas/ApprovalRequestResponse"
+                                    },
+                                    "title": "Response List Pending Approvals Approvals Get"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/approvals/{approval_id}/approve": {
+            "post": {
+                "summary": "Approve Approval",
+                "operationId": "approve_approval_approvals__approval_id__approve_post",
+                "parameters": [
+                    {
+                        "name": "approval_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string",
+                            "format": "uuid",
+                            "title": "Approval Id"
+                        }
+                    },
+                    {
+                        "name": "authorization",
+                        "in": "header",
+                        "required": false,
+                        "schema": {
+                            "anyOf": [
+                                {
+                                    "type": "string"
+                                },
+                                {
+                                    "type": "null"
+                                }
+                            ],
+                            "title": "Authorization"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ApprovalRequestResponse"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/approvals/{approval_id}/deny": {
+            "post": {
+                "summary": "Deny Approval",
+                "operationId": "deny_approval_approvals__approval_id__deny_post",
+                "parameters": [
+                    {
+                        "name": "approval_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string",
+                            "format": "uuid",
+                            "title": "Approval Id"
+                        }
+                    },
+                    {
+                        "name": "authorization",
+                        "in": "header",
+                        "required": false,
+                        "schema": {
+                            "anyOf": [
+                                {
+                                    "type": "string"
+                                },
+                                {
+                                    "type": "null"
+                                }
+                            ],
+                            "title": "Authorization"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ApprovalRequestResponse"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    },
+    "components": {
+        "schemas": {
+            "ApprovalRequestResponse": {
+                "properties": {
+                    "id": {
+                        "type": "string",
+                        "format": "uuid",
+                        "title": "Id"
+                    },
+                    "trace_id": {
+                        "type": "string",
+                        "format": "uuid",
+                        "title": "Trace Id"
+                    },
+                    "span_id": {
+                        "type": "string",
+                        "format": "uuid",
+                        "title": "Span Id"
+                    },
+                    "status": {
+                        "type": "string",
+                        "enum": [
+                            "pending",
+                            "approved",
+                            "denied",
+                            "timed_out"
+                        ],
+                        "title": "Status"
+                    },
+                    "requested_at": {
+                        "type": "string",
+                        "format": "date-time",
+                        "title": "Requested At"
+                    },
+                    "resolved_by": {
+                        "anyOf": [
+                            {
+                                "type": "string",
+                                "format": "uuid"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Resolved By"
+                    },
+                    "resolved_at": {
+                        "anyOf": [
+                            {
+                                "type": "string",
+                                "format": "date-time"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Resolved At"
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "id",
+                    "trace_id",
+                    "span_id",
+                    "status",
+                    "requested_at",
+                    "resolved_by",
+                    "resolved_at"
+                ],
+                "title": "ApprovalRequestResponse"
+            },
+            "CompleteSpanRequest": {
+                "properties": {
+                    "status": {
+                        "type": "string",
+                        "enum": [
+                            "completed",
+                            "failed"
+                        ],
+                        "title": "Status"
+                    },
+                    "latency_ms": {
+                        "type": "number",
+                        "title": "Latency Ms"
+                    },
+                    "cost": {
+                        "anyOf": [
+                            {
+                                "type": "number"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Cost"
+                    },
+                    "result": {
+                        "anyOf": [
+                            {},
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Result"
+                    },
+                    "error": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Error"
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "status",
+                    "latency_ms"
+                ],
+                "title": "CompleteSpanRequest"
+            },
+            "CompleteSpanResponse": {
+                "properties": {
+                    "span_id": {
+                        "type": "string",
+                        "format": "uuid",
+                        "title": "Span Id"
+                    },
+                    "status": {
+                        "type": "string",
+                        "enum": [
+                            "completed",
+                            "failed"
+                        ],
+                        "title": "Status"
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "span_id",
+                    "status"
+                ],
+                "title": "CompleteSpanResponse"
+            },
+            "CreatePolicyRequest": {
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "title": "Name"
+                    },
+                    "definition": {
+                        "items": {
+                            "$ref": "#/components/schemas/PolicyRule"
+                        },
+                        "type": "array",
+                        "title": "Definition"
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "name",
+                    "definition"
+                ],
+                "title": "CreatePolicyRequest"
+            },
+            "HTTPValidationError": {
+                "properties": {
+                    "detail": {
+                        "items": {
+                            "$ref": "#/components/schemas/ValidationError"
+                        },
+                        "type": "array",
+                        "title": "Detail"
+                    }
+                },
+                "type": "object",
+                "title": "HTTPValidationError"
+            },
+            "InterceptAllowedResponse": {
+                "properties": {
+                    "span_id": {
+                        "type": "string",
+                        "format": "uuid",
+                        "title": "Span Id"
+                    },
+                    "decision": {
+                        "type": "string",
+                        "const": "allowed",
+                        "title": "Decision",
+                        "default": "allowed"
+                    },
+                    "policy_id": {
+                        "anyOf": [
+                            {
+                                "type": "string",
+                                "format": "uuid"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Policy Id"
+                    },
+                    "result": {
+                        "anyOf": [
+                            {},
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Result"
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "span_id",
+                    "policy_id"
+                ],
+                "title": "InterceptAllowedResponse"
+            },
+            "InterceptBlockedResponse": {
+                "properties": {
+                    "span_id": {
+                        "type": "string",
+                        "format": "uuid",
+                        "title": "Span Id"
+                    },
+                    "decision": {
+                        "type": "string",
+                        "const": "blocked",
+                        "title": "Decision",
+                        "default": "blocked"
+                    },
+                    "policy_id": {
+                        "anyOf": [
+                            {
+                                "type": "string",
+                                "format": "uuid"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Policy Id"
+                    },
+                    "reason": {
+                        "type": "string",
+                        "title": "Reason"
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "span_id",
+                    "policy_id",
+                    "reason"
+                ],
+                "title": "InterceptBlockedResponse"
+            },
+            "InterceptPendingResponse": {
+                "properties": {
+                    "span_id": {
+                        "type": "string",
+                        "format": "uuid",
+                        "title": "Span Id"
+                    },
+                    "decision": {
+                        "type": "string",
+                        "const": "pending_approval",
+                        "title": "Decision",
+                        "default": "pending_approval"
+                    },
+                    "approval_request_id": {
+                        "type": "string",
+                        "format": "uuid",
+                        "title": "Approval Request Id"
+                    },
+                    "poll_url": {
+                        "type": "string",
+                        "title": "Poll Url"
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "span_id",
+                    "approval_request_id",
+                    "poll_url"
+                ],
+                "title": "InterceptPendingResponse"
+            },
+            "InterceptRequest": {
+                "properties": {
+                    "trace_id": {
+                        "type": "string",
+                        "format": "uuid",
+                        "title": "Trace Id"
+                    },
+                    "parent_span_id": {
+                        "anyOf": [
+                            {
+                                "type": "string",
+                                "format": "uuid"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Parent Span Id"
+                    },
+                    "tool_name": {
+                        "type": "string",
+                        "title": "Tool Name"
+                    },
+                    "args": {
+                        "additionalProperties": true,
+                        "type": "object",
+                        "title": "Args"
+                    },
+                    "agent_id": {
+                        "type": "string",
+                        "format": "uuid",
+                        "title": "Agent Id"
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "trace_id",
+                    "parent_span_id",
+                    "tool_name",
+                    "args",
+                    "agent_id"
+                ],
+                "title": "InterceptRequest"
+            },
+            "LoginRequest": {
+                "properties": {
+                    "email": {
+                        "type": "string",
+                        "title": "Email"
+                    },
+                    "password": {
+                        "type": "string",
+                        "title": "Password"
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "email",
+                    "password"
+                ],
+                "title": "LoginRequest"
+            },
+            "LogoutRequest": {
+                "properties": {
+                    "refresh_token": {
+                        "type": "string",
+                        "title": "Refresh Token"
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "refresh_token"
+                ],
+                "title": "LogoutRequest"
+            },
+            "PolicyMatch": {
+                "properties": {
+                    "tool": {
+                        "type": "string",
+                        "title": "Tool"
+                    },
+                    "pattern": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Pattern"
+                    },
+                    "database": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Database"
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "tool"
+                ],
+                "title": "PolicyMatch"
+            },
+            "PolicyResponse": {
+                "properties": {
+                    "id": {
+                        "type": "string",
+                        "format": "uuid",
+                        "title": "Id"
+                    },
+                    "org_id": {
+                        "type": "string",
+                        "format": "uuid",
+                        "title": "Org Id"
+                    },
+                    "policy_set_id": {
+                        "type": "string",
+                        "format": "uuid",
+                        "title": "Policy Set Id"
+                    },
+                    "name": {
+                        "type": "string",
+                        "title": "Name"
+                    },
+                    "version": {
+                        "type": "integer",
+                        "title": "Version"
+                    },
+                    "definition": {
+                        "items": {
+                            "$ref": "#/components/schemas/PolicyRule"
+                        },
+                        "type": "array",
+                        "title": "Definition"
+                    },
+                    "active": {
+                        "type": "boolean",
+                        "title": "Active"
+                    },
+                    "created_at": {
+                        "type": "string",
+                        "format": "date-time",
+                        "title": "Created At"
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "id",
+                    "org_id",
+                    "policy_set_id",
+                    "name",
+                    "version",
+                    "definition",
+                    "active",
+                    "created_at"
+                ],
+                "title": "PolicyResponse"
+            },
+            "PolicyRule": {
+                "properties": {
+                    "match": {
+                        "$ref": "#/components/schemas/PolicyMatch"
+                    },
+                    "action": {
+                        "type": "string",
+                        "enum": [
+                            "allow",
+                            "block",
+                            "require_approval"
+                        ],
+                        "title": "Action"
+                    },
+                    "condition": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Condition"
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "match",
+                    "action"
+                ],
+                "title": "PolicyRule",
+                "description": "One rule in the policy DSL. Rules are evaluated top-to-bottom per\n(agent_id, tool_name); first match wins."
+            },
+            "RefreshRequest": {
+                "properties": {
+                    "refresh_token": {
+                        "type": "string",
+                        "title": "Refresh Token"
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "refresh_token"
+                ],
+                "title": "RefreshRequest"
+            },
+            "TokenPairResponse": {
+                "properties": {
+                    "access_token": {
+                        "type": "string",
+                        "title": "Access Token"
+                    },
+                    "refresh_token": {
+                        "type": "string",
+                        "title": "Refresh Token"
+                    },
+                    "token_type": {
+                        "type": "string",
+                        "const": "bearer",
+                        "title": "Token Type",
+                        "default": "bearer"
+                    },
+                    "role": {
+                        "type": "string",
+                        "enum": [
+                            "owner",
+                            "admin",
+                            "approver",
+                            "viewer"
+                        ],
+                        "title": "Role"
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "access_token",
+                    "refresh_token",
+                    "role"
+                ],
+                "title": "TokenPairResponse"
+            },
+            "ValidationError": {
+                "properties": {
+                    "loc": {
+                        "items": {
+                            "anyOf": [
+                                {
+                                    "type": "string"
+                                },
+                                {
+                                    "type": "integer"
+                                }
+                            ]
+                        },
+                        "type": "array",
+                        "title": "Location"
+                    },
+                    "msg": {
+                        "type": "string",
+                        "title": "Message"
+                    },
+                    "type": {
+                        "type": "string",
+                        "title": "Error Type"
+                    },
+                    "input": {
+                        "title": "Input"
+                    },
+                    "ctx": {
+                        "type": "object",
+                        "title": "Context"
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "loc",
+                    "msg",
+                    "type"
+                ],
+                "title": "ValidationError"
+            }
+        }
+    }
+}
