@@ -781,7 +781,7 @@ Target architecture: `UPGRADE_ARCHITECTURE.md`. Target frontend: `FRONTEND_V2.md
 file before starting (migrations 0001–0006 present, 67 tests passing, live on Render, aggregator
 confirmed still on Postgres LISTEN/NOTIFY per v1 design) — no mismatch found.
 
-**Current phase**: U1–U3 complete, U4 next.
+**Current phase**: U1–U4 complete, U5 next.
 
 ### Phase status
 - **U1 — Explicit state machine: done.** `shared/src/bastion_shared/call_state.py` — `CallState` enum
@@ -876,7 +876,25 @@ confirmed still on Postgres LISTEN/NOTIFY per v1 design) — no mismatch found.
   this session: doesn't reproduce in isolation, and CI runs fresh Linux containers per run rather than
   this developer's persistent local Windows/Docker Desktop setup. Flagged here per the same honesty
   standard rather than silently ignored; worth watching if it starts appearing in CI too.
-- U4–U16: not started.
+- **U4 — Optimistic concurrency on policies: done.** **Flagged doc/code conflict, per standing
+  rule**: `UPGRADE_ARCHITECTURE.md` §5 drafts this as an in-place `UPDATE policies SET definition = $1,
+  version = version + 1 ... WHERE id = $2 AND version = $3`, which assumes a mutable `policies` row
+  (and an `updated_at` column that doesn't exist). v1's actual `policies` table is deliberately
+  append-only/immutable-versioned-rows (`DATA_MODEL.md`: "policies are versioned, never edited in
+  place"; locked in by the pre-existing `test_create_policy_does_not_mutate_previous_version`).
+  **Resolution taken** (ADR-016): reinterpreted optimistic concurrency for the immutable model —
+  `CreatePolicyRequest.based_on_version` (optional, additive), checked against the actual current
+  latest version inside the same transaction as the INSERT; mismatch or a losing race on the
+  `UNIQUE (policy_set_id, version)` constraint both raise `PolicyVersionConflict` →
+  `409 POLICY_VERSION_CONFLICT`. This also fixed a real pre-existing bug found while implementing:
+  concurrent `POST /policies` calls could already race on that same unique constraint and surface an
+  unhandled 500 — now a clean 409 either way. Milestone test
+  (`test_concurrent_policy_updates_from_stale_version_one_wins_one_gets_409`): two concurrent
+  `POST /policies` from the same stale `based_on_version` → exactly one 201, one 409, exactly one new
+  version persisted — passed on first run. Two more tests cover backward compatibility (no
+  `based_on_version` → old behavior unchanged) and the successful non-conflicting case. `API_SPEC.md`
+  updated. ADR-016 written.
+- U5–U16: not started.
 
 ### ADR checklist (mirrors `ADR_INDEX.md`)
 - [x] ADR-001: PostgreSQL as source of truth — `docs/adr/ADR-001-...md`.
@@ -885,7 +903,8 @@ confirmed still on Postgres LISTEN/NOTIFY per v1 design) — no mismatch found.
 - [x] ADR-004: at-least-once delivery + idempotent processing — `docs/adr/ADR-004-...md`.
 - [x] ADR-005: idempotency key design and enforcement — `docs/adr/ADR-005-...md`.
 - [x] ADR-014: Kafka partitioning key and ordering guarantees — `docs/adr/ADR-014-...md`.
-- [ ] ADR-006–013, 015–016: not yet written (scheduled for the phases that produce them per
+- [x] ADR-016: optimistic concurrency for policy edits — `docs/adr/ADR-016-...md`.
+- [ ] ADR-006–013, 015: not yet written (scheduled for the phases that produce them per
   `UPGRADE_BUILD_PLAN.md`).
 - [x] ADR-017 (unlisted, added U1): call state machine modeling — see
   `docs/adr/ADR-017-call-state-machine-modeling.md`.

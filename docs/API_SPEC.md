@@ -194,10 +194,15 @@ exactly like a JWT — identical RBAC, no separate weaker path.
 
   Prior to this, agents were only ever inserted directly via SQL (`docs/PROGRESS.md`) — that path still
   exists for tests and seed scripts, but a real caller no longer needs it.
-- `POST /policies` (role: `owner`/`admin`) — body: `{ "name": "...", "definition": [...] }`.
-  Creates a new version (never mutates); compiles the definition immediately (400
-  `INVALID_POLICY_CONDITION` on an unsafe/malformed condition expression, not a 500) even
-  though it isn't active yet.
+- `POST /policies` (role: `owner`/`admin`) — body: `{ "name": "...", "definition": [...],
+  "based_on_version": 1 }`. Creates a new version (never mutates); compiles the definition
+  immediately (400 `INVALID_POLICY_CONDITION` on an unsafe/malformed condition expression, not a
+  500) even though it isn't active yet. `based_on_version` is optional (U4, v2 upgrade,
+  `docs/adr/ADR-016`) — omit it to keep v1's original blind-append behavior with no conflict
+  detection. Supplied, it must match the actual current latest version for that policy's name at
+  write time, or the call fails with 409 `POLICY_VERSION_CONFLICT` instead of silently creating a
+  version past one a concurrent editor already committed — the client should re-`GET /policies`,
+  reconcile against the real current version, and retry with the fresh `based_on_version`.
 - `GET /policies` (any role) — all versions for the caller's org.
 - `POST /policies/{id}/activate` (role: `owner`/`admin`) — deactivates every other version
   in the same policy set, activates this one, hot-reloads every interceptor instance via

@@ -16,6 +16,19 @@ async def _init_connection(conn: asyncpg.Connection) -> None:
     await conn.set_type_codec("jsonb", encoder=json.dumps, decoder=json.loads, schema="pg_catalog")
 
 
+class PolicyVersionConflict(Exception):
+    """U4 (v2 upgrade), ADR-016: raised by create_policy when based_on_version
+    no longer matches the actual current version — main.py maps this to 409."""
+
+    def __init__(self, *, policy_set_id: UUID, current_version: int | None) -> None:
+        self.policy_set_id = policy_set_id
+        self.current_version = current_version
+        super().__init__(
+            f"policy_set {policy_set_id} has moved past the caller's based_on_version "
+            f"(current_version={current_version})"
+        )
+
+
 class Database:
     def __init__(self) -> None:
         self._pool: asyncpg.Pool | None = None
@@ -244,12 +257,35 @@ class Database:
         )
 
     async def create_policy(
-        self, *, org_id: UUID, name: str, definition: list[dict[str, Any]]
+        self,
+        *,
+        org_id: UUID,
+        name: str,
+        definition: list[dict[str, Any]],
+        based_on_version: int | None = None,
     ) -> asyncpg.Record:
         """Creates a new version. Never mutates an existing row (DATA_MODEL.md:
         "policies are versioned, never edited in place"). Resolves (creating
         if needed) the stable policy_set_id for this (org_id, name) — see
-        docs/ARCHITECTURE.md §10 for why that indirection exists."""
+        docs/ARCHITECTURE.md §10 for why that indirection exists.
+
+        U4 (v2 upgrade), optimistic concurrency (ADR-016): UPGRADE_ARCHITECTURE.md
+        §5 drafts this as an in-place `UPDATE ... WHERE version = $3`, which
+        assumes a mutable row this table deliberately isn't — the append-only
+        design is intentional (test_create_policy_does_not_mutate_previous_version)
+        and predates this phase. The equivalent guarantee for an immutable,
+        versioned-row model: `based_on_version`, if supplied, must still match
+        the actual current latest version at insert time, or this raises
+        `PolicyVersionConflict` instead of silently creating a version past
+        one a concurrent editor already committed. Two concurrent callers who
+        both pass the same (now-stale) `based_on_version` race on the
+        `UNIQUE (policy_set_id, version)` constraint itself — the real
+        arbiter, same DB-constraint-not-app-level-check pattern as ADR-005 —
+        the loser's `UniqueViolationError` is caught below and converted the
+        same way. `based_on_version=None` preserves v1's original behavior
+        exactly: blind append, no conflict detection, for backward
+        compatibility with callers that predate this field.
+        """
         async with self.pool.acquire() as conn, conn.transaction():
             policy_set_id = await conn.fetchval(
                 "SELECT id FROM policy_sets WHERE org_id = $1 AND name = $2", org_id, name
@@ -260,22 +296,35 @@ class Database:
                     org_id,
                     name,
                 )
-            next_version = await conn.fetchval(
-                "SELECT COALESCE(MAX(version), 0) + 1 FROM policies WHERE policy_set_id = $1",
+            current_version = await conn.fetchval(
+                "SELECT COALESCE(MAX(version), 0) FROM policies WHERE policy_set_id = $1",
                 policy_set_id,
             )
-            record = await conn.fetchrow(
-                """
-                INSERT INTO policies (org_id, policy_set_id, name, version, definition, active)
-                VALUES ($1, $2, $3, $4, $5, false)
-                RETURNING *
-                """,
-                org_id,
-                policy_set_id,
-                name,
-                next_version,
-                definition,
-            )
+            if based_on_version is not None and based_on_version != current_version:
+                raise PolicyVersionConflict(
+                    policy_set_id=policy_set_id, current_version=current_version
+                )
+            next_version = current_version + 1
+            try:
+                record = await conn.fetchrow(
+                    """
+                    INSERT INTO policies (org_id, policy_set_id, name, version, definition, active)
+                    VALUES ($1, $2, $3, $4, $5, false)
+                    RETURNING *
+                    """,
+                    org_id,
+                    policy_set_id,
+                    name,
+                    next_version,
+                    definition,
+                )
+            except asyncpg.exceptions.UniqueViolationError as exc:
+                # A second caller committed `next_version` first, between our
+                # read above and this INSERT — the exact race the read-then-
+                # check above narrows but can't fully close on its own.
+                raise PolicyVersionConflict(
+                    policy_set_id=policy_set_id, current_version=None
+                ) from exc
         assert record is not None
         return record
 

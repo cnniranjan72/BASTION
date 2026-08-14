@@ -17,6 +17,12 @@ from .policy import PolicyDefinition
 class CreatePolicyRequest(BaseModel):
     name: str
     definition: PolicyDefinition
+    # U4 (v2 upgrade), optimistic concurrency: the version the caller last
+    # saw as current for this policy's policy_set — omitted preserves v1's
+    # original blind-append behavior (no conflict detection); supplied, the
+    # server 409s instead of creating a version past a concurrent editor's
+    # already-committed one. See docs/adr/ADR-016.
+    based_on_version: int | None = None
 
 
 class PolicyResponse(BaseModel):

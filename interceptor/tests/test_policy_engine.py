@@ -101,6 +101,107 @@ async def test_create_policy_does_not_mutate_previous_version(
     assert v1.json()["policy_set_id"] == v2.json()["policy_set_id"]
 
 
+async def test_create_policy_omitting_based_on_version_keeps_v1_blind_append_behavior(
+    make_user: Callable[..., Awaitable[dict]], login_as: Callable[[dict], Awaitable[dict]]
+) -> None:
+    """U4 (v2 upgrade): based_on_version is additive, not a breaking change —
+    a caller that never sends it (the whole SDK/test surface predating U4)
+    gets the exact same behavior as before this phase, no 409 possible."""
+    user = await make_user(role="admin")
+    login = await login_as(user)
+    async with _http_client() as http:
+        v1 = await http.post(
+            "/policies",
+            json={"name": "no-based-on-version-test", "definition": []},
+            headers=_auth_headers(login),
+        )
+        v2 = await http.post(
+            "/policies",
+            json={"name": "no-based-on-version-test", "definition": []},
+            headers=_auth_headers(login),
+        )
+    assert v1.status_code == 201
+    assert v2.status_code == 201
+    assert v2.json()["version"] == 2
+
+
+async def test_create_policy_with_correct_based_on_version_succeeds(
+    make_user: Callable[..., Awaitable[dict]], login_as: Callable[[dict], Awaitable[dict]]
+) -> None:
+    user = await make_user(role="admin")
+    login = await login_as(user)
+    async with _http_client() as http:
+        v1 = await http.post(
+            "/policies",
+            json={"name": "correct-based-on-version-test", "definition": []},
+            headers=_auth_headers(login),
+        )
+        assert v1.json()["version"] == 1
+        v2 = await http.post(
+            "/policies",
+            json={
+                "name": "correct-based-on-version-test",
+                "definition": [],
+                "based_on_version": 1,
+            },
+            headers=_auth_headers(login),
+        )
+    assert v2.status_code == 201
+    assert v2.json()["version"] == 2
+
+
+async def test_concurrent_policy_updates_from_stale_version_one_wins_one_gets_409(
+    make_user: Callable[..., Awaitable[dict]], login_as: Callable[[dict], Awaitable[dict]]
+) -> None:
+    """U4 milestone test (UPGRADE_BUILD_PLAN.md): two concurrent updates to
+    the same policy from stale versions — assert exactly one succeeds and
+    the other gets a clean 409, not a silent overwrite. See ADR-016 for why
+    "update" means "create the next version" here, not an in-place edit —
+    v1's policies table is deliberately append-only
+    (test_create_policy_does_not_mutate_previous_version, above)."""
+    user = await make_user(role="admin")
+    login = await login_as(user)
+    name = "concurrent-conflict-test"
+    async with _http_client() as http:
+        v1 = await http.post(
+            "/policies", json={"name": name, "definition": []}, headers=_auth_headers(login)
+        )
+        assert v1.json()["version"] == 1
+
+        # Two admins who both last saw version 1 as current, editing at the
+        # same time — both attempt to create version 2 based on that same
+        # (soon to be stale, for one of them) starting point.
+        results = await asyncio.gather(
+            http.post(
+                "/policies",
+                json={"name": name, "definition": [], "based_on_version": 1},
+                headers=_auth_headers(login),
+            ),
+            http.post(
+                "/policies",
+                json={"name": name, "definition": [], "based_on_version": 1},
+                headers=_auth_headers(login),
+            ),
+        )
+
+    statuses = sorted(r.status_code for r in results)
+    assert statuses == [201, 409], (
+        f"expected exactly one 201 and one 409, got {[r.status_code for r in results]}"
+    )
+
+    conflict_response = next(r for r in results if r.status_code == 409)
+    conflict_body = conflict_response.json()
+    assert conflict_body["error"]["code"] == "POLICY_VERSION_CONFLICT"
+    assert "request_id" in conflict_body["error"]
+
+    # Not a silent overwrite: exactly one new version (2) exists, the loser
+    # created nothing.
+    async with _http_client() as http:
+        listing = await http.get("/policies", headers=_auth_headers(login))
+    versions = sorted(p["version"] for p in listing.json() if p["name"] == name)
+    assert versions == [1, 2]
+
+
 async def test_create_policy_rejects_unsafe_condition_with_error_envelope(
     make_user: Callable[..., Awaitable[dict]], login_as: Callable[[dict], Awaitable[dict]]
 ) -> None:

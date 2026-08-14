@@ -90,7 +90,7 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from . import policy as policy_engine
 from .auth import AuthenticatedAgent, authenticate_agent, hash_api_key
 from .config import config
-from .db import db
+from .db import PolicyVersionConflict, db
 from .human_auth import (
     API_TOKEN_PREFIX,
     AuthenticatedUser,
@@ -704,7 +704,28 @@ async def create_policy(
             },
         ) from exc
     definition_dump = [rule.model_dump(mode="json") for rule in body.definition]
-    record = await db.create_policy(org_id=user.org_id, name=body.name, definition=definition_dump)
+    try:
+        record = await db.create_policy(
+            org_id=user.org_id,
+            name=body.name,
+            definition=definition_dump,
+            based_on_version=body.based_on_version,
+        )
+    except PolicyVersionConflict as exc:
+        # U4 (v2 upgrade), ADR-016: the caller's based_on_version has already
+        # been superseded by a concurrent create — a clean 409 telling them
+        # to re-fetch and reconcile, not a silent extra version past
+        # whichever edit committed first.
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": {
+                    "code": "POLICY_VERSION_CONFLICT",
+                    "message": str(exc),
+                    "request_id": request.state.request_id,
+                }
+            },
+        ) from exc
     return _policy_response(record)
 
 
