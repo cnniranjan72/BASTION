@@ -497,8 +497,17 @@ polish.
   - 14 auth tests passing (11 existing + 3 new signup tests + 1 new validation-message regression test),
     `docs/API_SPEC.md` and `docs/api/*.openapi.json` updated in the same change, not left to drift again.
 
+- [2026-08-14] Neon Postgres connected and verified (post-launch, user-requested): ran all 5 migrations
+  against the real Neon instance (`infra/db/migrate.py` with `DATABASE_URL` overridden to
+  `NEON_DATABASE_URL`), seeded base org/user + the Phase 8 demo agent/policy, then ran a full
+  signup/login/intercept/policy-block cycle against a temporary interceptor instance pointed at Neon
+  (port 4011, separate from the normal dev instance on 4001) — the exact same demo scenario from Phase 8,
+  now proven against the real deployment-target Postgres, not just a connectivity check. Local dev and
+  the test suite still default to Docker Compose Postgres per §7's original reasoning; Neon is wired up
+  and ready for Render, not swapped in as the new local default.
+
 ## Next up
-- Neon Postgres connection, Render deployment, UI visual polish — in progress, user-requested.
+- Render deployment, UI visual polish — in progress, user-requested.
 - If resumed after that: worth resetting/isolating the dev Postgres before anything latency-sensitive
   (thousands of accumulated `test-org-*` rows from every phase's test runs share the same dev DB) and
   building the CI-gated version of the API drift check `docs/api/DRIFT.md` describes but doesn't
