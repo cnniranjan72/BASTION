@@ -233,3 +233,48 @@ async def test_malformed_token_rejected(bad_token: str) -> None:
     async with _http_client() as http:
         response = await http.get("/policies", headers={"Authorization": f"Bearer {bad_token}"})
     assert response.status_code == 401
+
+
+# -- Password change (post-launch, Account page) ---------------------------
+
+
+async def test_change_password_and_login_with_new_one(
+    make_user: Callable[..., Awaitable[dict]], login_as: Callable[[dict], Awaitable[dict]]
+) -> None:
+    user = await make_user(role="owner")
+    login = await login_as(user)
+
+    async with _http_client() as http:
+        response = await http.patch(
+            "/auth/password",
+            json={"current_password": user["password"], "new_password": "a whole new passphrase"},
+            headers={"Authorization": f"Bearer {login['access_token']}"},
+        )
+    assert response.status_code == 200
+
+    async with _http_client() as http:
+        old_login = await http.post(
+            "/auth/login", json={"email": user["email"], "password": user["password"]}
+        )
+        new_login = await http.post(
+            "/auth/login",
+            json={"email": user["email"], "password": "a whole new passphrase"},
+        )
+    assert old_login.status_code == 401
+    assert new_login.status_code == 200
+
+
+async def test_change_password_rejects_wrong_current_password(
+    make_user: Callable[..., Awaitable[dict]], login_as: Callable[[dict], Awaitable[dict]]
+) -> None:
+    user = await make_user(role="owner")
+    login = await login_as(user)
+
+    async with _http_client() as http:
+        response = await http.patch(
+            "/auth/password",
+            json={"current_password": "totally wrong", "new_password": "a whole new passphrase"},
+            headers={"Authorization": f"Bearer {login['access_token']}"},
+        )
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "INVALID_CURRENT_PASSWORD"

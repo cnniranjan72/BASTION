@@ -1,16 +1,17 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api, ApiError } from "../api/client";
+import { TRACE_STATUS_DESCRIPTION, TRACE_STATUS_LABEL } from "../lib/labels";
 import { TableSkeleton } from "./TableSkeleton";
 import { TopBar } from "./TopBar";
 import type { Agent, TraceStatus, TraceSummary } from "../api/types";
 
 const STATUS_FILTERS: Array<{ value: TraceStatus | "all"; label: string }> = [
   { value: "all", label: "All statuses" },
-  { value: "running", label: "Running" },
-  { value: "completed", label: "Completed" },
-  { value: "had_blocks", label: "Had blocks" },
-  { value: "failed", label: "Failed" },
+  { value: "running", label: TRACE_STATUS_LABEL.running },
+  { value: "completed", label: TRACE_STATUS_LABEL.completed },
+  { value: "had_blocks", label: TRACE_STATUS_LABEL.had_blocks },
+  { value: "failed", label: TRACE_STATUS_LABEL.failed },
 ];
 
 export function TracesPage() {
@@ -97,6 +98,15 @@ export function TracesPage() {
           </span>
         </div>
 
+        <div className="status-legend">
+          {(Object.keys(TRACE_STATUS_LABEL) as TraceStatus[]).map((s) => (
+            <span key={s} className="status-legend__item" title={TRACE_STATUS_DESCRIPTION[s]}>
+              <span className={`status-legend__dot status-legend__dot--${s}`} />
+              {TRACE_STATUS_LABEL[s]}
+            </span>
+          ))}
+        </div>
+
         {loading ? (
           <TableSkeleton />
         ) : filtered.length === 0 ? (
@@ -121,8 +131,11 @@ export function TracesPage() {
                 {filtered.map((t) => (
                   <tr key={t.trace_id} onClick={() => navigate(`/graph?trace=${t.trace_id}`)}>
                     <td>
-                      <span className={`badge badge--status-${t.status}`}>
-                        {t.status.replace("_", " ")}
+                      <span
+                        className={`badge badge--status-${t.status}`}
+                        title={TRACE_STATUS_DESCRIPTION[t.status]}
+                      >
+                        {TRACE_STATUS_LABEL[t.status]}
                       </span>
                     </td>
                     <td>{agentName(t.agent_id)}</td>

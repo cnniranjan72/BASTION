@@ -1,7 +1,9 @@
-import { useRef } from "react";
+import { useRef, useState } from "react";
 import { useFrame } from "@react-three/fiber";
+import { Html } from "@react-three/drei";
 import type { Mesh } from "three";
 import { useGraphStore } from "../../store/graph";
+import { NODE_STATUS_LABEL } from "../../lib/labels";
 import { colorForStatus, isTransient, radiusForNode } from "./encoding";
 import { useSimulationRegistry } from "./SimulationContext";
 
@@ -20,6 +22,7 @@ export function NodeMesh({ spanId }: NodeMeshProps) {
   const { simNodes } = useSimulationRegistry();
   const meshRef = useRef<Mesh>(null);
   const pulseRef = useRef(0);
+  const [hovered, setHovered] = useState(false);
 
   useFrame((_state, delta) => {
     const simNode = simNodes.get(spanId);
@@ -49,12 +52,22 @@ export function NodeMesh({ spanId }: NodeMeshProps) {
         event.stopPropagation();
         selectNode(spanId);
       }}
+      onPointerOver={(event) => {
+        event.stopPropagation();
+        setHovered(true);
+        document.body.style.cursor = "pointer";
+      }}
+      onPointerOut={(event) => {
+        event.stopPropagation();
+        setHovered(false);
+        document.body.style.cursor = "auto";
+      }}
     >
       <sphereGeometry args={[radius, 24, 24]} />
       <meshStandardMaterial
         color={color}
         emissive={color}
-        emissiveIntensity={isSelected ? 1.1 : 0.45}
+        emissiveIntensity={isSelected || hovered ? 1.1 : 0.45}
         roughness={0.35}
         metalness={0.1}
       />
@@ -63,6 +76,49 @@ export function NodeMesh({ spanId }: NodeMeshProps) {
           <sphereGeometry args={[radius * 1.35, 24, 24]} />
           <meshBasicMaterial color={color} transparent opacity={0.15} />
         </mesh>
+      )}
+
+      {/* Always-on label so a first-time viewer isn't looking at unlabeled
+          colored balls — the richer tooltip only appears on hover.
+          zIndexRange capped low: drei's Html defaults to a near-max
+          z-index, which otherwise floats node labels above fixed page
+          chrome like the legend regardless of DOM order. */}
+      <Html
+        position={[0, -radius - 0.22, 0]}
+        center
+        distanceFactor={9}
+        zIndexRange={[1, 0]}
+        style={{ pointerEvents: "none" }}
+      >
+        <div className="node-label">{node.tool_name}</div>
+      </Html>
+
+      {hovered && (
+        <Html
+          position={[0, radius + 0.25, 0]}
+          center
+          distanceFactor={9}
+          zIndexRange={[1, 0]}
+          style={{ pointerEvents: "none" }}
+        >
+          <div className="node-tooltip">
+            <div className="node-tooltip__title">{node.tool_name}</div>
+            <div className="node-tooltip__row">
+              <span
+                className="node-tooltip__dot"
+                style={{ background: color, boxShadow: `0 0 6px ${color}` }}
+              />
+              {NODE_STATUS_LABEL[node.status]}
+            </div>
+            {node.latency_ms != null && (
+              <div className="node-tooltip__row">{node.latency_ms.toFixed(0)} ms</div>
+            )}
+            {node.cost != null && (
+              <div className="node-tooltip__row">${node.cost.toFixed(4)}</div>
+            )}
+            {node.reason && <div className="node-tooltip__reason">{node.reason}</div>}
+          </div>
+        </Html>
       )}
     </mesh>
   );

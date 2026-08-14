@@ -3,7 +3,9 @@ import { Link, useSearchParams } from "react-router-dom";
 import { api, ApiError } from "../api/client";
 import { useGraphStore } from "../store/graph";
 import { useLiveGraph } from "../hooks/useLiveGraph";
+import { TRACE_STATUS_LABEL } from "../lib/labels";
 import { GraphCanvas } from "./GraphView/GraphCanvas";
+import { GraphLegend } from "./GraphView/GraphLegend";
 import { InspectorPanel } from "./InspectorPanel";
 import { TopBar } from "./TopBar";
 import type { Agent, TraceSummary } from "../api/types";
@@ -125,7 +127,7 @@ export function Dashboard() {
                     }`}
                     onClick={() => openReplay(trace.trace_id)}
                   >
-                    <span className="trace-list__status">{trace.status}</span>
+                    <span className="trace-list__status">{TRACE_STATUS_LABEL[trace.status]}</span>
                     <span className="trace-list__meta">
                       {trace.total_calls} calls · {trace.blocked_calls} blocked
                     </span>
@@ -152,7 +154,10 @@ export function Dashboard() {
               )}
             </div>
           ) : (
-            <GraphCanvas />
+            <>
+              <GraphCanvas />
+              <GraphLegend />
+            </>
           )}
         </main>
 

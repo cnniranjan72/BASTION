@@ -8,8 +8,16 @@ plan — see docs/ARCHITECTURE.md §16 and docs/api/DRIFT.md.
 """
 
 from .agents_api import AgentResponse, CreateAgentRequest, CreateAgentResponse, UpdateAgentRequest
+from .api_tokens_api import ApiTokenResponse, CreateApiTokenRequest, CreateApiTokenResponse
 from .approvals import ApprovalRequestResponse, ApprovalStatus
-from .auth_api import LoginRequest, LogoutRequest, RefreshRequest, SignupRequest, TokenPairResponse
+from .auth_api import (
+    ChangePasswordRequest,
+    LoginRequest,
+    LogoutRequest,
+    RefreshRequest,
+    SignupRequest,
+    TokenPairResponse,
+)
 from .errors import BastionError, ErrorDetail, ErrorResponse
 from .events import (
     CallAttemptedPayload,
@@ -49,6 +57,10 @@ from .users_api import CreateUserRequest, CreateUserResponse, UpdateUserRoleRequ
 
 __all__ = [
     "AgentResponse",
+    "ApiTokenResponse",
+    "CreateApiTokenRequest",
+    "CreateApiTokenResponse",
+    "ChangePasswordRequest",
     "CreateUserRequest",
     "CreateUserResponse",
     "UpdateUserRoleRequest",

@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { api, ApiError } from "../api/client";
 import { useAuthStore } from "../store/auth";
 import { toast } from "../store/toast";
+import { EmptyState } from "./EmptyState";
+import { ApprovalsIcon } from "./icons";
 import { TableSkeleton } from "./TableSkeleton";
 import { TopBar } from "./TopBar";
 import type { ApprovalRequest } from "../api/types";
@@ -75,7 +77,10 @@ export function ApprovalsPage() {
         {loading ? (
           <TableSkeleton />
         ) : approvals.length === 0 ? (
-          <p className="page__empty">No pending approvals.</p>
+          <EmptyState icon={ApprovalsIcon} title="No pending approvals">
+            When a policy routes a call to a human, it'll show up here for someone to approve or
+            deny.
+          </EmptyState>
         ) : (
           <div className="table-scroll">
             <table className="data-table">

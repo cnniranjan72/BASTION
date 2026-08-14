@@ -4,7 +4,8 @@
 All of `docs/BUILD_PLAN.md` (Phases 0-9) plus the final documentation set are done. Now working through
 user-requested follow-ups: signup/registration (done), Neon Postgres connection (done), agents/policies/
 approvals management UI (done), visual design pass (done), Team/RBAC + Overview (done), Traces/Analytics/
-command palette (done), Render deployment (next).
+command palette (done), usability fixes + personal API tokens + Account page (done), Render deployment
+(next).
 
 ## Log
 - [2026-08-14] Project specced out (PRD, ARCHITECTURE, DATA_MODEL, AUTH, API_SPEC, BUILD_PLAN written). No code yet.
@@ -664,6 +665,55 @@ command palette (done), Render deployment (next).
     matches what a new user actually lands on now, not just the 3D-graph-only story from before the
     Team/RBAC/Overview work above.
   - Docs-only change, no code touched; no test/lint run required.
+
+- [2026-08-14] Usability fixes + personal API tokens + Account page (post-launch, user-requested after
+  reviewing the live product directly — "I can understand nothing from [the graph]," "what does
+  had_blocks mean," "the layout uses only 75% of the screen," "add an access token... system for
+  outside users," "add account page to handle profiles"):
+  - **Full-width layout bug, found by the user, confirmed real**: `.page`/`.page--wide` capped content
+    at 1100px/1300px with no `margin: auto`, leaving a large uncentered dead gap at real monitor
+    widths. Raised to 1600px/1900px, centered.
+  - **Status labels**: every trace/node status was rendered as its raw backend enum
+    (`had_blocks`, `pending_approval`, ...) with zero explanation — the literal question the user
+    asked. Added `frontend/src/lib/labels.ts` (plain-English label + one-line description per status),
+    wired into every render site (Traces, Overview, Dashboard sidebar, InspectorPanel, CommandPalette),
+    plus a legend row on the Traces page.
+  - **Graph legibility, the biggest complaint**: nodes were unlabeled colored spheres — no text
+    anywhere in the 3D view. Added an always-visible tool-name label under every node
+    (`@react-three/drei`'s `Html`) and a hover tooltip (status, latency, cost, block reason via
+    `NodeMesh.tsx`'s new `onPointerOver`/`onPointerOut`), plus a fixed color-legend overlay
+    (`GraphView/GraphLegend.tsx`) explaining what each color means. **Real bug found and fixed in the
+    same pass**: drei's `Html` defaults to a near-max `zIndexRange`, so node labels rendered on top of
+    the legend panel regardless of DOM order — capped to `zIndexRange={[1, 0]}` on both Html usages so
+    fixed page chrome always wins.
+  - **Icon system**: the product had zero icons anywhere — nav, stat cards, empty states were plain
+    text, the single biggest thing making it read as unfinished (confirmed by a direct visual audit
+    against live screenshots before starting this work). Added a ~14-icon hand-written inline SVG set
+    (`components/icons.tsx`, Feather-style, `currentColor`) instead of an icon library — wired into
+    TopBar nav, Overview's stat cards, and a new shared `EmptyState` component (icon + heading + one
+    line) used on Approvals/Agents/Policies/Account instead of bare "No X yet" text. Nav's hamburger
+    breakpoint moved 1100px → 1260px to keep room for icons at the 8-link width.
+  - **Backend: personal API tokens** (`api_tokens` table, migration `0006`) — a third auth credential
+    (`bstn_pat_...`) alongside agent keys and JWT sessions. `authenticate_user` recognizes the prefix
+    and routes to a token-hash lookup (SHA-256, same reasoning as agent keys) instead of JWT decoding;
+    everything downstream (RBAC, org scoping) is identical either way, so a token isn't a
+    separate/weaker auth path. Personal, not org-shared: list/revoke scoped to `user_id`, not `org_id`
+    — a teammate in the same org gets 404 trying to revoke someone else's token, tested explicitly.
+    `POST/GET/DELETE /api-tokens`, plus `PATCH /auth/password` (self-service change, requires the
+    current password). 10 new tests (`test_api_tokens.py` + 2 in `test_auth.py`), including one that
+    proves a created token actually authenticates a real `/agents` call, not just that create/list
+    succeed in isolation. Full 60-test backend suite passes, ruff clean, strict mypy clean.
+  - **Frontend: `/account`** — profile (email/role/org/joined, reusing the existing `GET /users` list
+    rather than adding a redundant `/users/me` endpoint), change-password form, and API token
+    create/list/revoke with the same one-time-reveal pattern as an agent's key. Linked from a new
+    account icon in the topbar's user block (desktop icon button + mobile menu item) rather than
+    growing the main nav to 9 items.
+  - **Real bug found and fixed during live verification**: token creation 404'd on first test — the
+    running dev `interceptor` process predated these code changes and hadn't been restarted (no
+    `--reload` flag in the dev command). Restarted it, confirmed `/api-tokens`/`/auth/password` appear
+    in its live OpenAPI schema, then re-verified the full create → reveal → list → revoke flow live.
+  - `docs/AUTH.md` §4, `docs/DATA_MODEL.md`, `docs/API_SPEC.md`, and the generated OpenAPI snapshot all
+    updated in the same change. Frontend `typecheck`/`lint` clean.
 
 ## Next up
 - Render deployment — next, now that the product itself (not just the backend) is actually usable

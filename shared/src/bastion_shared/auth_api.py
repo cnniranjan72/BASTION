@@ -39,3 +39,13 @@ class RefreshRequest(BaseModel):
 
 class LogoutRequest(BaseModel):
     refresh_token: str
+
+
+class ChangePasswordRequest(BaseModel):
+    """Requires the current password (not just a valid session) so a
+    hijacked/left-open browser tab can't silently change a user's password
+    without them ever typing it — same reasoning most account-settings
+    password changes use."""
+
+    current_password: str
+    new_password: str = Field(min_length=8)

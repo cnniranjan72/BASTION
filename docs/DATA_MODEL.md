@@ -33,6 +33,19 @@ Event sourcing for everything trace-related. Traditional CRUD for account/policy
 | expires_at | timestamptz | |
 | revoked_at | timestamptz nullable | |
 
+### `api_tokens` (added post-launch, not in the original spec — AUTH.md §4)
+| column | type | notes |
+|---|---|---|
+| id | uuid pk | |
+| org_id | uuid fk | |
+| user_id | uuid fk | personal, not org-shared — list/revoke are scoped to this, not `org_id` |
+| name | text | user-chosen label, e.g. "CI pipeline" |
+| token_prefix | text | first few chars of the raw token, for display in the list UI |
+| token_hash | text unique | SHA-256, same reasoning as `agents.api_key_hash` |
+| created_at | timestamptz | |
+| last_used_at | timestamptz nullable | updated on every authenticated request the token makes |
+| revoked_at | timestamptz nullable | |
+
 ### `agents`
 | column | type | notes |
 |---|---|---|

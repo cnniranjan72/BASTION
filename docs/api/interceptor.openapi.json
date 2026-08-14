@@ -185,6 +185,66 @@
                 }
             }
         },
+        "/auth/password": {
+            "patch": {
+                "summary": "Change Password",
+                "operationId": "change_password_auth_password_patch",
+                "parameters": [
+                    {
+                        "name": "authorization",
+                        "in": "header",
+                        "required": false,
+                        "schema": {
+                            "anyOf": [
+                                {
+                                    "type": "string"
+                                },
+                                {
+                                    "type": "null"
+                                }
+                            ],
+                            "title": "Authorization"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/ChangePasswordRequest"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "additionalProperties": {
+                                        "type": "string"
+                                    },
+                                    "title": "Response Change Password Auth Password Patch"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/intercept": {
             "post": {
                 "summary": "Intercept",
@@ -818,6 +878,159 @@
                 }
             }
         },
+        "/api-tokens": {
+            "get": {
+                "summary": "List Api Tokens",
+                "operationId": "list_api_tokens_api_tokens_get",
+                "parameters": [
+                    {
+                        "name": "authorization",
+                        "in": "header",
+                        "required": false,
+                        "schema": {
+                            "anyOf": [
+                                {
+                                    "type": "string"
+                                },
+                                {
+                                    "type": "null"
+                                }
+                            ],
+                            "title": "Authorization"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "array",
+                                    "items": {
+                                        "$ref": "#/components/schemas/ApiTokenResponse"
+                                    },
+                                    "title": "Response List Api Tokens Api Tokens Get"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            "post": {
+                "summary": "Create Api Token",
+                "operationId": "create_api_token_api_tokens_post",
+                "parameters": [
+                    {
+                        "name": "authorization",
+                        "in": "header",
+                        "required": false,
+                        "schema": {
+                            "anyOf": [
+                                {
+                                    "type": "string"
+                                },
+                                {
+                                    "type": "null"
+                                }
+                            ],
+                            "title": "Authorization"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/CreateApiTokenRequest"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "201": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/CreateApiTokenResponse"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api-tokens/{token_id}": {
+            "delete": {
+                "summary": "Revoke Api Token",
+                "operationId": "revoke_api_token_api_tokens__token_id__delete",
+                "parameters": [
+                    {
+                        "name": "token_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string",
+                            "format": "uuid",
+                            "title": "Token Id"
+                        }
+                    },
+                    {
+                        "name": "authorization",
+                        "in": "header",
+                        "required": false,
+                        "schema": {
+                            "anyOf": [
+                                {
+                                    "type": "string"
+                                },
+                                {
+                                    "type": "null"
+                                }
+                            ],
+                            "title": "Authorization"
+                        }
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "Successful Response"
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/approvals/{approval_id}": {
             "get": {
                 "summary": "Get Approval",
@@ -1084,6 +1297,62 @@
                 ],
                 "title": "AgentResponse"
             },
+            "ApiTokenResponse": {
+                "properties": {
+                    "id": {
+                        "type": "string",
+                        "format": "uuid",
+                        "title": "Id"
+                    },
+                    "name": {
+                        "type": "string",
+                        "title": "Name"
+                    },
+                    "token_prefix": {
+                        "type": "string",
+                        "title": "Token Prefix"
+                    },
+                    "created_at": {
+                        "type": "string",
+                        "format": "date-time",
+                        "title": "Created At"
+                    },
+                    "last_used_at": {
+                        "anyOf": [
+                            {
+                                "type": "string",
+                                "format": "date-time"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Last Used At"
+                    },
+                    "revoked_at": {
+                        "anyOf": [
+                            {
+                                "type": "string",
+                                "format": "date-time"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Revoked At"
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "id",
+                    "name",
+                    "token_prefix",
+                    "created_at",
+                    "last_used_at",
+                    "revoked_at"
+                ],
+                "title": "ApiTokenResponse"
+            },
             "ApprovalRequestResponse": {
                 "properties": {
                     "id": {
@@ -1152,6 +1421,26 @@
                     "resolved_at"
                 ],
                 "title": "ApprovalRequestResponse"
+            },
+            "ChangePasswordRequest": {
+                "properties": {
+                    "current_password": {
+                        "type": "string",
+                        "title": "Current Password"
+                    },
+                    "new_password": {
+                        "type": "string",
+                        "minLength": 8,
+                        "title": "New Password"
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "current_password",
+                    "new_password"
+                ],
+                "title": "ChangePasswordRequest",
+                "description": "Requires the current password (not just a valid session) so a\nhijacked/left-open browser tab can't silently change a user's password\nwithout them ever typing it \u00e2\u20ac\u201d same reasoning most account-settings\npassword changes use."
             },
             "CompleteSpanRequest": {
                 "properties": {
@@ -1304,6 +1593,84 @@
                     "api_key"
                 ],
                 "title": "CreateAgentResponse"
+            },
+            "CreateApiTokenRequest": {
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "maxLength": 100,
+                        "minLength": 1,
+                        "title": "Name",
+                        "description": "A label, e.g. 'CI pipeline'."
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "name"
+                ],
+                "title": "CreateApiTokenRequest"
+            },
+            "CreateApiTokenResponse": {
+                "properties": {
+                    "id": {
+                        "type": "string",
+                        "format": "uuid",
+                        "title": "Id"
+                    },
+                    "name": {
+                        "type": "string",
+                        "title": "Name"
+                    },
+                    "token_prefix": {
+                        "type": "string",
+                        "title": "Token Prefix"
+                    },
+                    "created_at": {
+                        "type": "string",
+                        "format": "date-time",
+                        "title": "Created At"
+                    },
+                    "last_used_at": {
+                        "anyOf": [
+                            {
+                                "type": "string",
+                                "format": "date-time"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Last Used At"
+                    },
+                    "revoked_at": {
+                        "anyOf": [
+                            {
+                                "type": "string",
+                                "format": "date-time"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Revoked At"
+                    },
+                    "token": {
+                        "type": "string",
+                        "title": "Token",
+                        "description": "Shown once \u00e2\u20ac\u201d only the hash is ever stored after this response."
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "id",
+                    "name",
+                    "token_prefix",
+                    "created_at",
+                    "last_used_at",
+                    "revoked_at",
+                    "token"
+                ],
+                "title": "CreateApiTokenResponse"
             },
             "CreatePolicyRequest": {
                 "properties": {

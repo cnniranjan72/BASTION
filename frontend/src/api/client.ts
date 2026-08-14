@@ -1,8 +1,10 @@
 import { useAuthStore } from "../store/auth";
 import type {
   Agent,
+  ApiToken,
   ApprovalRequest,
   CreateAgentResponse,
+  CreateApiTokenResponse,
   CreateUserResponse,
   ErrorResponse,
   Policy,
@@ -114,6 +116,20 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ refresh_token }),
     }),
+  changePassword: (current_password: string, new_password: string) =>
+    request<{ status: string }>(INTERCEPTOR_BASE, "/auth/password", {
+      method: "PATCH",
+      body: JSON.stringify({ current_password, new_password }),
+    }),
+
+  listApiTokens: () => request<ApiToken[]>(INTERCEPTOR_BASE, "/api-tokens"),
+  createApiToken: (name: string) =>
+    request<CreateApiTokenResponse>(INTERCEPTOR_BASE, "/api-tokens", {
+      method: "POST",
+      body: JSON.stringify({ name }),
+    }),
+  revokeApiToken: (id: string) =>
+    request<void>(INTERCEPTOR_BASE, `/api-tokens/${id}`, { method: "DELETE" }),
 
   listUsers: () => request<TeamMember[]>(INTERCEPTOR_BASE, "/users"),
   createUser: (email: string, role: UserRole) =>

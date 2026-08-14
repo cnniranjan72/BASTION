@@ -60,6 +60,34 @@ on or correct earlier ones — noted where that happens).
   library's bundle cost or virtualization would earn its keep. Keeping the addition to three pieces
   instead of a longer list was itself a scope decision — the request explicitly asked for "meaningful,"
   not maximal.
+- **Usability pass driven by direct user testing (post-launch, user-requested — "I can understand
+  nothing from it," "what does had_blocks mean," "the layout uses only 75% of the screen").** Real
+  defects found by actually looking at the running product, not assumed:
+  - `.page`/`.page--wide` capped content at 1100px/1300px with no centering, leaving a large dead gap
+    on the right at real monitor widths — raised to 1600px/1900px with `margin: 0 auto`.
+  - Every status was shown as its raw backend enum (`had_blocks`, `pending_approval`) with no
+    explanation. Added `lib/labels.ts` (plain-English label + one-line description per status) used
+    everywhere a status renders, plus a legend on the Traces page and a color legend overlaid on the
+    3D graph itself.
+  - The 3D graph had no text anywhere — colored spheres only made sense to someone who already knew the
+    code. Added an always-visible tool-name label under every node (`@react-three/drei`'s `Html`) and a
+    richer hover tooltip (status, latency, cost, block reason). Found and fixed a real z-index bug in
+    the same pass: drei's `Html` defaults to a near-max z-index, so node labels floated above the fixed
+    legend overlay regardless of DOM order — fixed by capping `zIndexRange={[1, 0]}` on both.
+  - No icon appeared anywhere in the product — nav, stat cards, and empty states were plain text,
+    which read as unfinished more than anything else about the visual design. Added a ~14-icon hand
+    -written inline SVG set (`components/icons.tsx`) rather than a library — the product needs a small,
+    fixed icon vocabulary at one size, which a dozen inline SVGs cover without a font/sprite dependency.
+    Also added a shared `EmptyState` component (icon + heading + one line) replacing bare "No X yet"
+    text on Approvals/Agents/Policies/Account.
+- **Personal API tokens + Account page (post-launch, user-requested — "add an access token... system
+  for outside users to use the product via APIs," "add account page to handle profiles").** Full
+  detail in AUTH.md §4/decisions above; the short version: a third auth credential (`bstn_pat_...`)
+  alongside agent keys and JWT sessions, routed through the same `authenticate_user`/RBAC path, scoped
+  to the user who created it rather than shared org-wide. The user's mention of "access token and
+  refresh token system" already existed for browser login (Phase 5) — the actual gap was that nothing
+  let a *script* authenticate without an interactive login/refresh cycle, which personal tokens close
+  without touching the existing JWT flow at all.
 - **Overview became the new "/" landing page, Graph moved to "/graph".** The product previously opened
   straight into the 3D live graph, which is compelling once you have an agent running but is a dead end
   for literally everyone's first session (zero agents, zero traces, nothing to look at). An at-a-glance

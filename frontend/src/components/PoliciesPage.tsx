@@ -3,6 +3,8 @@ import type { FormEvent } from "react";
 import { api, ApiError } from "../api/client";
 import { useAuthStore } from "../store/auth";
 import { toast } from "../store/toast";
+import { EmptyState } from "./EmptyState";
+import { PoliciesIcon } from "./icons";
 import { TableSkeleton } from "./TableSkeleton";
 import { TopBar } from "./TopBar";
 import type { Policy } from "../api/types";
@@ -138,7 +140,10 @@ export function PoliciesPage() {
         {loading ? (
           <TableSkeleton />
         ) : sets.size === 0 ? (
-          <p className="page__empty">No policies yet.</p>
+          <EmptyState icon={PoliciesIcon} title="No policies yet">
+            Write one above — it defines what your agents may do unattended, what needs a human,
+            and what's blocked outright.
+          </EmptyState>
         ) : (
           <div className="policy-sets">
             {Array.from(sets.entries()).map(([policySetId, versions]) => (

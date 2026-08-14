@@ -138,6 +138,11 @@ and "exists but isn't yours" look identical to the caller.
 Prior to this, users were inserted directly via SQL in dev/tests (`docs/PROGRESS.md`) — that path still
 exists for tests and seed scripts, but real signup no longer requires it.
 
+- `PATCH /auth/password` (any role, added post-launch) — body: `{ "current_password": "...",
+  "new_password": "..." }`. 401 `INVALID_CURRENT_PASSWORD` if the current password doesn't match —
+  required so a hijacked or left-open session can't silently change it without the real password ever
+  being typed.
+
 ### Team (RBAC management)
 - `GET /users` (any role) — every user in the caller's org, ordered by join date. Never includes a
   password or any credential.
@@ -151,6 +156,20 @@ exists for tests and seed scripts, but real signup no longer requires it.
   else). 409 `LAST_OWNER` if the change would demote the organization's only remaining owner — that
   specific transition is blocked because it's a self-inflicted lockout (nobody left who can activate a
   policy, provision anyone, or promote someone back to owner), not blocked as "demotion" in general.
+
+### API tokens (added post-launch — AUTH.md §4)
+A third auth credential alongside agent keys and JWT sessions: a long-lived token a human hands to a
+script/CI job to call this same management API. `authenticate_user` accepts a `bstn_pat_...` token
+exactly like a JWT — identical RBAC, no separate weaker path.
+
+- `GET /api-tokens` (any role) — the caller's **own** tokens only (personal, not org-shared like
+  agents/policies). Never includes the raw token, only `token_prefix`.
+- `POST /api-tokens` (any role) — body: `{ "name": "..." }` → `ApiTokenResponse` plus a one-time
+  `token` field (`bstn_pat_` prefix; only the SHA-256 hash is ever stored, same as an agent key —
+  no way to retrieve a lost token later, by design).
+- `DELETE /api-tokens/{id}` (any role) — 204 on success. 404 `API_TOKEN_NOT_FOUND` if the token
+  doesn't exist, is already revoked, **or belongs to a different user** (even in the same org) — same
+  check-before-mutate, no-disclosure-on-cross-owner discipline as everywhere else in this API.
 
 ### Agents & Policies
 - `POST /agents` (role: `owner`/`admin`) — body: `{ "name": "...", "policy_set_id": "uuid | null" }`

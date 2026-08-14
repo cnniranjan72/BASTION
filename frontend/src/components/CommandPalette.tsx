@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import { useAuthStore } from "../store/auth";
 import { useCommandPaletteStore } from "../store/commandPalette";
+import { TRACE_STATUS_LABEL } from "../lib/labels";
 import type { Agent, TraceSummary } from "../api/types";
 
 interface Command {
@@ -22,6 +23,7 @@ const PAGES: Array<{ label: string; to: string; hint: string }> = [
   { label: "Policies", to: "/policies", hint: "Versioned policy definitions" },
   { label: "Approvals", to: "/approvals", hint: "Calls waiting on a human" },
   { label: "Team", to: "/team", hint: "Teammates and roles" },
+  { label: "Account", to: "/account", hint: "Profile, password, API tokens" },
 ];
 
 export function CommandPalette() {
@@ -84,7 +86,7 @@ export function CommandPalette() {
     ...traces.map((t) => ({
       id: `trace:${t.trace_id}`,
       label: `Trace ${t.trace_id.slice(0, 8)}`,
-      hint: `${t.status} · ${t.total_calls} calls${t.blocked_calls ? ` · ${t.blocked_calls} blocked` : ""}`,
+      hint: `${TRACE_STATUS_LABEL[t.status]} · ${t.total_calls} calls${t.blocked_calls ? ` · ${t.blocked_calls} blocked` : ""}`,
       group: "Recent traces",
       action: () => navigate(`/graph?trace=${t.trace_id}`),
     })),

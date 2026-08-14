@@ -1,4 +1,5 @@
 import { useGraphStore } from "../store/graph";
+import { NODE_STATUS_LABEL } from "../lib/labels";
 import { colorForStatus } from "./GraphView/encoding";
 
 /** The "2D inspector" ARCHITECTURE.md §2.6 calls out as where actual
@@ -33,7 +34,7 @@ export function InspectorPanel() {
 
       <dl className="inspector__fields">
         <dt>status</dt>
-        <dd>{node.status}</dd>
+        <dd>{NODE_STATUS_LABEL[node.status]}</dd>
 
         <dt>span_id</dt>
         <dd className="inspector__mono">{node.span_id}</dd>

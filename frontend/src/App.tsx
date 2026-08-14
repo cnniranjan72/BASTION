@@ -9,6 +9,7 @@ import { ApprovalsPage } from "./components/ApprovalsPage";
 import { TeamPage } from "./components/TeamPage";
 import { TracesPage } from "./components/TracesPage";
 import { AnalyticsPage } from "./components/AnalyticsPage";
+import { AccountPage } from "./components/AccountPage";
 import { ToastHost } from "./components/ToastHost";
 import { CommandPalette } from "./components/CommandPalette";
 import { useAuthStore } from "./store/auth";
@@ -88,6 +89,14 @@ export function App() {
           element={
             <RequireAuth>
               <TeamPage />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/account"
+          element={
+            <RequireAuth>
+              <AccountPage />
             </RequireAuth>
           }
         />

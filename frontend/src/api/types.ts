@@ -28,6 +28,19 @@ export interface CreateUserResponse extends TeamMember {
   temporary_password: string;
 }
 
+export interface ApiToken {
+  id: string;
+  name: string;
+  token_prefix: string;
+  created_at: string;
+  last_used_at: string | null;
+  revoked_at: string | null;
+}
+
+export interface CreateApiTokenResponse extends ApiToken {
+  token: string;
+}
+
 export type NodeStatus =
   "pending" | "allowed" | "blocked" | "pending_approval" | "completed" | "failed";
 

@@ -45,13 +45,17 @@ import structlog
 from bastion_shared import (
     AccessTokenClaims,
     AgentResponse,
+    ApiTokenResponse,
     ApprovalRequestResponse,
     CallAttemptedPayload,
     CallOutcomePayload,
+    ChangePasswordRequest,
     CompleteSpanRequest,
     CompleteSpanResponse,
     CreateAgentRequest,
     CreateAgentResponse,
+    CreateApiTokenRequest,
+    CreateApiTokenResponse,
     CreatePolicyRequest,
     CreateUserRequest,
     CreateUserResponse,
@@ -82,7 +86,14 @@ from . import policy as policy_engine
 from .auth import AuthenticatedAgent, authenticate_agent, hash_api_key
 from .config import config
 from .db import db
-from .human_auth import AuthenticatedUser, hash_password, require_role, verify_password
+from .human_auth import (
+    API_TOKEN_PREFIX,
+    AuthenticatedUser,
+    hash_api_token,
+    hash_password,
+    require_role,
+    verify_password,
+)
 from .logging import configure_logging, log
 from .metrics import intercept_latency_seconds, policy_decisions_total
 from .redis_bus import redis_bus
@@ -361,6 +372,30 @@ async def logout(body: LogoutRequest) -> dict[str, str]:
     if record is not None:
         await db.revoke_refresh_token_family(record["family_id"])
     return {"status": "logged_out"}
+
+
+@app.patch("/auth/password")
+async def change_password(
+    body: ChangePasswordRequest,
+    request: Request,
+    user: AuthenticatedUser = require_any_role,
+) -> dict[str, str]:
+    record = await db.get_user_by_id(user.id)
+    assert record is not None
+    if not verify_password(body.current_password, record["password_hash"]):
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "error": {
+                    "code": "INVALID_CURRENT_PASSWORD",
+                    "message": "current password is incorrect",
+                    "request_id": request.state.request_id,
+                }
+            },
+        )
+    await db.update_user_password(user.id, hash_password(body.new_password))
+    log.info("password changed", user_id=str(user.id))
+    return {"status": "password_changed"}
 
 
 @app.get("/approvals-ui", include_in_schema=False)
@@ -775,6 +810,62 @@ async def update_user_role(
     record = await db.update_user_role(user_id, user.org_id, body.role)
     assert record is not None
     return _user_response(record)
+
+
+def _api_token_response(record: Any) -> ApiTokenResponse:
+    return ApiTokenResponse(
+        id=record["id"],
+        name=record["name"],
+        token_prefix=record["token_prefix"],
+        created_at=record["created_at"],
+        last_used_at=record["last_used_at"],
+        revoked_at=record["revoked_at"],
+    )
+
+
+@app.get("/api-tokens")
+async def list_api_tokens(user: AuthenticatedUser = require_any_role) -> list[ApiTokenResponse]:
+    records = await db.list_api_tokens_for_user(user.id)
+    return [_api_token_response(r) for r in records]
+
+
+@app.post("/api-tokens", status_code=201)
+async def create_api_token(
+    body: CreateApiTokenRequest, user: AuthenticatedUser = require_any_role
+) -> CreateApiTokenResponse:
+    # A long-lived credential for scripts/CI to call this same management
+    # API — same auth domain as a login session (authenticate_user accepts
+    # either), not a separate/weaker path. Shown once, same one-time-reveal
+    # pattern as an agent's key and a provisioned teammate's temp password.
+    raw_token = f"{API_TOKEN_PREFIX}{secrets.token_urlsafe(32)}"
+    record = await db.create_api_token(
+        org_id=user.org_id,
+        user_id=user.id,
+        name=body.name,
+        token_prefix=raw_token[: len(API_TOKEN_PREFIX) + 6],
+        token_hash=hash_api_token(raw_token),
+    )
+    log.info("api token created", user_id=str(user.id), org_id=str(user.org_id))
+    return CreateApiTokenResponse(**_api_token_response(record).model_dump(), token=raw_token)
+
+
+@app.delete("/api-tokens/{token_id}", status_code=204)
+async def revoke_api_token(
+    token_id: UUID, request: Request, user: AuthenticatedUser = require_any_role
+) -> Response:
+    record = await db.revoke_api_token(token_id, user.id)
+    if record is None:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": {
+                    "code": "API_TOKEN_NOT_FOUND",
+                    "message": f"no active API token {token_id}",
+                    "request_id": request.state.request_id,
+                }
+            },
+        )
+    return Response(status_code=204)
 
 
 def _approval_response(record: Any) -> ApprovalRequestResponse:

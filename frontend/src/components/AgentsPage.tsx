@@ -3,6 +3,8 @@ import type { FormEvent } from "react";
 import { api, ApiError } from "../api/client";
 import { useAuthStore } from "../store/auth";
 import { toast } from "../store/toast";
+import { EmptyState } from "./EmptyState";
+import { AgentsIcon } from "./icons";
 import { TableSkeleton } from "./TableSkeleton";
 import { TopBar } from "./TopBar";
 import type { Agent, Policy } from "../api/types";
@@ -149,9 +151,11 @@ export function AgentsPage() {
         {loading ? (
           <TableSkeleton />
         ) : agents.length === 0 ? (
-          <p className="page__empty">
-            No agents yet. {canManage(role) && "Create one above to get an API key."}
-          </p>
+          <EmptyState icon={AgentsIcon} title="No agents yet">
+            {canManage(role)
+              ? "Create one above to get an API key — that's what your agent authenticates with."
+              : "Ask an owner or admin to create one."}
+          </EmptyState>
         ) : (
           <div className="table-scroll">
             <table className="data-table">

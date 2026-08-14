@@ -437,6 +437,77 @@ class Database:
             org_id,
         )
 
+    async def update_user_password(self, user_id: UUID, password_hash: str) -> None:
+        await self.pool.execute(
+            "UPDATE users SET password_hash = $1 WHERE id = $2", password_hash, user_id
+        )
+
+    # -- API tokens (post-launch) -----------------------------------------
+
+    async def create_api_token(
+        self, *, org_id: UUID, user_id: UUID, name: str, token_prefix: str, token_hash: str
+    ) -> asyncpg.Record:
+        record = await self.pool.fetchrow(
+            """
+            INSERT INTO api_tokens (org_id, user_id, name, token_prefix, token_hash)
+            VALUES ($1, $2, $3, $4, $5)
+            RETURNING id, name, token_prefix, created_at, last_used_at, revoked_at
+            """,
+            org_id,
+            user_id,
+            name,
+            token_prefix,
+            token_hash,
+        )
+        assert record is not None
+        return record
+
+    async def list_api_tokens_for_user(self, user_id: UUID) -> list[asyncpg.Record]:
+        # Personal, like a GitHub PAT — scoped to the user who created it,
+        # not every teammate in the org (unlike agents/policies, which are
+        # org-shared resources).
+        return cast(
+            list[asyncpg.Record],
+            await self.pool.fetch(
+                "SELECT id, name, token_prefix, created_at, last_used_at, revoked_at "
+                "FROM api_tokens WHERE user_id = $1 ORDER BY created_at DESC",
+                user_id,
+            ),
+        )
+
+    async def get_api_token_by_hash(self, token_hash: str) -> asyncpg.Record | None:
+        """Joins users for role/org_id so a valid token authenticates exactly
+        like the JWT session of the user who created it — same RBAC, no
+        separate/weaker permission model to keep in sync."""
+        return cast(
+            "asyncpg.Record | None",
+            await self.pool.fetchrow(
+                """
+                SELECT t.id, t.user_id, u.org_id, u.role
+                FROM api_tokens t
+                JOIN users u ON u.id = t.user_id
+                WHERE t.token_hash = $1 AND t.revoked_at IS NULL
+                """,
+                token_hash,
+            ),
+        )
+
+    async def touch_api_token(self, token_id: UUID) -> None:
+        await self.pool.execute(
+            "UPDATE api_tokens SET last_used_at = now() WHERE id = $1", token_id
+        )
+
+    async def revoke_api_token(self, token_id: UUID, user_id: UUID) -> asyncpg.Record | None:
+        return await self.pool.fetchrow(
+            """
+            UPDATE api_tokens SET revoked_at = now()
+            WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL
+            RETURNING id, name, token_prefix, created_at, last_used_at, revoked_at
+            """,
+            token_id,
+            user_id,
+        )
+
     async def insert_refresh_token(
         self, *, user_id: UUID, token_hash: str, family_id: UUID, expires_at: Any
     ) -> asyncpg.Record:

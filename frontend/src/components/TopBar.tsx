@@ -4,17 +4,29 @@ import { api } from "../api/client";
 import { useAuthStore } from "../store/auth";
 import { toast } from "../store/toast";
 import { useCommandPaletteStore } from "../store/commandPalette";
+import {
+  AccountIcon,
+  AgentsIcon,
+  AnalyticsIcon,
+  ApprovalsIcon,
+  GraphIcon,
+  OverviewIcon,
+  PoliciesIcon,
+  SearchIcon,
+  TeamIcon,
+  TracesIcon,
+} from "./icons";
 import type { ConnectionStatus } from "../hooks/useLiveGraph";
 
 const NAV_LINKS = [
-  { to: "/", label: "Overview", end: true },
-  { to: "/graph", label: "Graph" },
-  { to: "/traces", label: "Traces" },
-  { to: "/analytics", label: "Analytics" },
-  { to: "/agents", label: "Agents" },
-  { to: "/policies", label: "Policies" },
-  { to: "/approvals", label: "Approvals" },
-  { to: "/team", label: "Team" },
+  { to: "/", label: "Overview", end: true, icon: OverviewIcon },
+  { to: "/graph", label: "Graph", icon: GraphIcon },
+  { to: "/traces", label: "Traces", icon: TracesIcon },
+  { to: "/analytics", label: "Analytics", icon: AnalyticsIcon },
+  { to: "/agents", label: "Agents", icon: AgentsIcon },
+  { to: "/policies", label: "Policies", icon: PoliciesIcon },
+  { to: "/approvals", label: "Approvals", icon: ApprovalsIcon },
+  { to: "/team", label: "Team", icon: TeamIcon },
 ];
 
 const STATUS_LABEL: Record<ConnectionStatus, string> = {
@@ -66,6 +78,7 @@ export function TopBar({ liveStatus }: TopBarProps) {
       </button>
 
       <button className="topbar__search" onClick={openPalette} aria-label="Open command palette">
+        <SearchIcon width={14} height={14} />
         <span>Jump to…</span>
         <kbd>⌘K</kbd>
       </button>
@@ -79,6 +92,7 @@ export function TopBar({ liveStatus }: TopBarProps) {
             onClick={() => setMenuOpen(false)}
             className={({ isActive }) => `topbar__nav-link${isActive ? " is-active" : ""}`}
           >
+            <link.icon width={16} height={16} />
             {link.label}
           </NavLink>
         ))}
@@ -86,6 +100,14 @@ export function TopBar({ liveStatus }: TopBarProps) {
         <div className="topbar__user topbar__user--mobile">
           <span className="topbar__role">{role}</span>
           <span className="topbar__org">org {orgId?.slice(0, 8)}</span>
+          <button
+            onClick={() => {
+              navigate("/account");
+              setMenuOpen(false);
+            }}
+          >
+            <AccountIcon width={14} height={14} /> Account
+          </button>
           <button onClick={handleLogout}>Sign out</button>
         </div>
       </nav>
@@ -100,6 +122,9 @@ export function TopBar({ liveStatus }: TopBarProps) {
       <div className="topbar__user topbar__user--desktop">
         <span className="topbar__role">{role}</span>
         <span className="topbar__org">org {orgId?.slice(0, 8)}</span>
+        <button className="topbar__icon-button" onClick={() => navigate("/account")} aria-label="Account">
+          <AccountIcon width={16} height={16} />
+        </button>
         <button onClick={handleLogout}>Sign out</button>
       </div>
     </header>

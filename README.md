@@ -163,8 +163,8 @@ Promoting a second owner first, then demoting the original, still works.
 
 ## Product surface
 
-Eight pages behind one nav, each backed by real endpoints — not a mockup of a bigger product — plus a
-⌘K command palette for jumping to any of them, an agent, or a recent trace without touching the mouse:
+Nine pages, each backed by real endpoints — not a mockup of a bigger product — plus a ⌘K command
+palette for jumping to any of them, an agent, or a recent trace without touching the mouse:
 
 - **Overview** (`/`) — agent/policy/approval/cost counts at a glance (count up on load), recent traces,
   and an explicit "create an agent → write a policy → watch it live" checklist for a brand-new org
@@ -183,6 +183,9 @@ Eight pages behind one nav, each backed by real endpoints — not a mockup of a 
 - **Team** (`/team`) — see everyone in your org, provision a teammate with a role (a one-time temporary
   password, not an email invite — no email infrastructure exists in this project, and pretending
   otherwise would be worse than not having the feature), change anyone's role.
+- **Account** (`/account`) — your own profile, change your password, and create/revoke personal API
+  tokens (`bstn_pat_...`) for calling this same API from a script or CI job without an interactive
+  login — a third auth credential alongside agent keys and JWT sessions, scoped to you, not your org.
 
 ## Repo layout
 

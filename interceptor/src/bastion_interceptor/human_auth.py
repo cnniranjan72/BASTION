@@ -7,6 +7,7 @@ a password) is the concrete expression of that split.
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
 from functools import lru_cache
@@ -19,8 +20,16 @@ from bastion_shared import AccessTokenClaims, InvalidAccessToken, UserRole, deco
 from fastapi import Depends, Header, HTTPException, Request
 
 from .config import config
+from .db import db
 
 _hasher = PasswordHasher()
+
+# Personal API tokens (post-launch) are a third auth credential type,
+# distinguished from a JWT access token by a recognizable prefix so
+# authenticate_user can route to the right verification path without
+# guessing — a JWT is three dot-separated base64 segments, this is one
+# opaque high-entropy string.
+API_TOKEN_PREFIX = "bstn_pat_"
 
 
 def hash_password(raw_password: str) -> str:
@@ -32,6 +41,13 @@ def verify_password(raw_password: str, password_hash: str) -> bool:
         return _hasher.verify(password_hash, raw_password)
     except VerifyMismatchError:
         return False
+
+
+def hash_api_token(raw_token: str) -> str:
+    # SHA-256, not argon2id — same reasoning as agent API keys (auth.py):
+    # a high-entropy random token is a lookup key, not a password, so slow
+    # hashing buys nothing but latency.
+    return hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
 
 
 @lru_cache(maxsize=1)
@@ -66,6 +82,14 @@ async def authenticate_user(
             "Authorization: Bearer <access token> header is required",
         )
     token = authorization.removeprefix("Bearer ").strip()
+
+    if token.startswith(API_TOKEN_PREFIX):
+        record = await db.get_api_token_by_hash(hash_api_token(token))
+        if record is None:
+            raise _unauthorized(request, "INVALID_ACCESS_TOKEN", "invalid or revoked API token")
+        await db.touch_api_token(record["id"])
+        return AuthenticatedUser(id=record["user_id"], org_id=record["org_id"], role=record["role"])
+
     try:
         claims: AccessTokenClaims = decode_access_token(token, _public_key_pem())
     except InvalidAccessToken as exc:

@@ -1,8 +1,11 @@
 import { useEffect, useState } from "react";
+import type { ComponentType, SVGProps } from "react";
 import { Link } from "react-router-dom";
 import { api, ApiError } from "../api/client";
 import { useAuthStore } from "../store/auth";
 import { useCountUp } from "../hooks/useCountUp";
+import { TRACE_STATUS_LABEL } from "../lib/labels";
+import { AgentsIcon, AlertIcon, AnalyticsIcon, ApprovalsIcon, GraphIcon, PoliciesIcon } from "./icons";
 import { TopBar } from "./TopBar";
 import type { Agent, ApprovalRequest, TraceSummary } from "../api/types";
 
@@ -18,17 +21,20 @@ function StatCard({
   label,
   value,
   tone,
+  icon: Icon,
 }: {
   to: string;
   label: string;
   value: string | number;
   tone?: "danger" | "warning";
+  icon: ComponentType<SVGProps<SVGSVGElement>>;
 }) {
   const numeric = typeof value === "number" ? value : null;
   const animated = useCountUp(numeric ?? 0);
   const display = numeric === null ? value : animated;
   return (
     <Link to={to} className={`stat-card${tone ? ` stat-card--${tone}` : ""}`}>
+      <Icon className="stat-card__icon" width={20} height={20} />
       <span className="stat-card__value">{display}</span>
       <span className="stat-card__label">{label}</span>
     </Link>
@@ -88,26 +94,34 @@ export function OverviewPage() {
         ) : (
           <>
             <div className="stat-grid">
-              <StatCard to="/agents" label="Agents" value={stats?.agents.length ?? "—"} />
+              <StatCard to="/agents" label="Agents" value={stats?.agents.length ?? "—"} icon={AgentsIcon} />
               <StatCard
                 to="/policies"
                 label="Active policies"
                 value={stats?.activePolicySets ?? "—"}
+                icon={PoliciesIcon}
               />
               <StatCard
                 to="/approvals"
                 label="Pending approvals"
                 value={stats?.approvals.length ?? "—"}
                 tone={stats && stats.approvals.length > 0 ? "warning" : undefined}
+                icon={ApprovalsIcon}
               />
               <StatCard
                 to="/graph"
                 label="Blocked calls"
                 value={blockedCalls}
                 tone={blockedCalls > 0 ? "danger" : undefined}
+                icon={AlertIcon}
               />
-              <StatCard to="/graph" label="Total calls" value={totalCalls} />
-              <StatCard to="/graph" label="Total cost" value={`$${totalCost.toFixed(4)}`} />
+              <StatCard to="/graph" label="Total calls" value={totalCalls} icon={GraphIcon} />
+              <StatCard
+                to="/graph"
+                label="Total cost"
+                value={`$${totalCost.toFixed(4)}`}
+                icon={AnalyticsIcon}
+              />
             </div>
 
             <section className="overview-recent">
@@ -119,10 +133,10 @@ export function OverviewPage() {
                   {stats?.traces.slice(0, 6).map((t) => (
                     <li key={t.trace_id}>
                       <Link
-                        to="/graph"
+                        to={`/graph?trace=${t.trace_id}`}
                         className={`trace-list__item trace-list__item--${t.status}`}
                       >
-                        <span className="trace-list__status">{t.status}</span>
+                        <span className="trace-list__status">{TRACE_STATUS_LABEL[t.status]}</span>
                         <span className="trace-list__meta">
                           {t.total_calls} calls · {t.blocked_calls} blocked ·{" "}
                           {new Date(t.started_at).toLocaleString()}
