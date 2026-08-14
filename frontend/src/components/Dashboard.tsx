@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { api, ApiError } from "../api/client";
 import { useGraphStore } from "../store/graph";
 import { useLiveGraph } from "../hooks/useLiveGraph";
 import { GraphCanvas } from "./GraphView/GraphCanvas";
 import { InspectorPanel } from "./InspectorPanel";
 import { TopBar } from "./TopBar";
-import type { TraceSummary } from "../api/types";
+import type { Agent, TraceSummary } from "../api/types";
 
 type ViewMode =
   { kind: "idle" } | { kind: "live"; agentId: string } | { kind: "replay"; traceId: string };
@@ -13,12 +14,24 @@ type ViewMode =
 export function Dashboard() {
   const [mode, setMode] = useState<ViewMode>({ kind: "idle" });
   const [agentIdInput, setAgentIdInput] = useState("");
+  const [agents, setAgents] = useState<Agent[]>([]);
+  const [agentsLoaded, setAgentsLoaded] = useState(false);
   const [traces, setTraces] = useState<TraceSummary[]>([]);
   const [tracesError, setTracesError] = useState<string | null>(null);
   const loadSnapshot = useGraphStore((s) => s.loadSnapshot);
   const reset = useGraphStore((s) => s.reset);
 
   const liveStatus = useLiveGraph(mode.kind === "live" ? mode.agentId : null);
+
+  useEffect(() => {
+    api
+      .listAgents()
+      .then(setAgents)
+      .catch(() => {
+        // Non-fatal — the picker just falls back to manual agent_id entry.
+      })
+      .finally(() => setAgentsLoaded(true));
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -61,14 +74,31 @@ export function Dashboard() {
         <aside className="sidebar">
           <section>
             <h2>Live view</h2>
-            <div className="sidebar__live-form">
-              <input
-                placeholder="agent_id"
-                value={agentIdInput}
-                onChange={(e) => setAgentIdInput(e.target.value)}
-              />
-              <button onClick={goLive}>Connect</button>
-            </div>
+            {agentsLoaded && agents.length === 0 ? (
+              <p className="sidebar__empty">
+                No agents yet. <Link to="/agents">Create one</Link> to see it here.
+              </p>
+            ) : (
+              <div className="sidebar__live-form">
+                {agents.length > 0 ? (
+                  <select value={agentIdInput} onChange={(e) => setAgentIdInput(e.target.value)}>
+                    <option value="">Choose an agent…</option>
+                    {agents.map((a) => (
+                      <option key={a.id} value={a.id}>
+                        {a.name}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    placeholder="agent_id"
+                    value={agentIdInput}
+                    onChange={(e) => setAgentIdInput(e.target.value)}
+                  />
+                )}
+                <button onClick={goLive}>Connect</button>
+              </div>
+            )}
           </section>
 
           <section>
@@ -100,7 +130,14 @@ export function Dashboard() {
         <main className="graph-area">
           {mode.kind === "idle" ? (
             <div className="graph-area__placeholder">
-              Enter an agent_id and connect, or pick a trace to replay.
+              {agentsLoaded && agents.length === 0 ? (
+                <>
+                  Nothing to show yet — <Link to="/agents">create your first agent</Link> to get an
+                  API key, point it at BASTION, and its calls will show up here live.
+                </>
+              ) : (
+                "Choose an agent and connect, or pick a trace to replay."
+              )}
             </div>
           ) : (
             <GraphCanvas />

@@ -1,6 +1,8 @@
 import { useAuthStore } from "../store/auth";
 import type {
+  Agent,
   ApprovalRequest,
+  CreateAgentResponse,
   ErrorResponse,
   Policy,
   RawEvent,
@@ -110,7 +112,24 @@ export const api = {
       body: JSON.stringify({ refresh_token }),
     }),
 
+  listAgents: () => request<Agent[]>(INTERCEPTOR_BASE, "/agents"),
+  createAgent: (name: string, policy_set_id: string | null) =>
+    request<CreateAgentResponse>(INTERCEPTOR_BASE, "/agents", {
+      method: "POST",
+      body: JSON.stringify({ name, policy_set_id }),
+    }),
+  updateAgentPolicySet: (agentId: string, policy_set_id: string | null) =>
+    request<Agent>(INTERCEPTOR_BASE, `/agents/${agentId}`, {
+      method: "PATCH",
+      body: JSON.stringify({ policy_set_id }),
+    }),
+
   listPolicies: () => request<Policy[]>(INTERCEPTOR_BASE, "/policies"),
+  createPolicy: (name: string, definition: Policy["definition"]) =>
+    request<Policy>(INTERCEPTOR_BASE, "/policies", {
+      method: "POST",
+      body: JSON.stringify({ name, definition }),
+    }),
   activatePolicy: (id: string) =>
     request<Policy>(INTERCEPTOR_BASE, `/policies/${id}/activate`, { method: "POST" }),
 

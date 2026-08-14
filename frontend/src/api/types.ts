@@ -73,6 +73,18 @@ export interface RawEvent {
   created_at: string;
 }
 
+export interface Agent {
+  id: string;
+  org_id: string;
+  name: string;
+  policy_set_id: string | null;
+  created_at: string;
+}
+
+export interface CreateAgentResponse extends Agent {
+  api_key: string;
+}
+
 export interface ApprovalRequest {
   id: string;
   trace_id: string;

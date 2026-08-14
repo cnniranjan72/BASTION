@@ -44,11 +44,14 @@ import asyncpg
 import structlog
 from bastion_shared import (
     AccessTokenClaims,
+    AgentResponse,
     ApprovalRequestResponse,
     CallAttemptedPayload,
     CallOutcomePayload,
     CompleteSpanRequest,
     CompleteSpanResponse,
+    CreateAgentRequest,
+    CreateAgentResponse,
     CreatePolicyRequest,
     EventType,
     InterceptAllowedResponse,
@@ -62,6 +65,7 @@ from bastion_shared import (
     RefreshRequest,
     SignupRequest,
     TokenPairResponse,
+    UpdateAgentRequest,
     UserRole,
     encode_access_token,
 )
@@ -71,7 +75,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from . import policy as policy_engine
-from .auth import AuthenticatedAgent, authenticate_agent
+from .auth import AuthenticatedAgent, authenticate_agent, hash_api_key
 from .config import config
 from .db import db
 from .human_auth import AuthenticatedUser, hash_password, require_role, verify_password
@@ -589,6 +593,92 @@ async def activate_policy(
     # *other* running interceptor instance picks it up too, with no restart.
     await redis_bus.publish_policy_update(record["policy_set_id"])
     return _policy_response(record)
+
+
+def _agent_response(record: Any) -> AgentResponse:
+    return AgentResponse(
+        id=record["id"],
+        org_id=record["org_id"],
+        name=record["name"],
+        policy_set_id=record["default_policy_set_id"],
+        created_at=record["created_at"],
+    )
+
+
+@app.post("/agents", status_code=201)
+async def create_agent(
+    body: CreateAgentRequest,
+    request: Request,
+    user: AuthenticatedUser = require_admin,
+) -> CreateAgentResponse:
+    if body.policy_set_id is not None and not await db.policy_set_belongs_to_org(
+        body.policy_set_id, user.org_id
+    ):
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": {
+                    "code": "POLICY_SET_NOT_FOUND",
+                    "message": f"no policy set {body.policy_set_id}",
+                    "request_id": request.state.request_id,
+                }
+            },
+        )
+    # bastion_ prefix makes a leaked key greppable/identifiable in logs —
+    # same reasoning as e.g. GitHub's sk-/ghp_ prefixes. Only ever shown
+    # here, at creation; the DB stores nothing but its SHA-256 hash
+    # (auth.py — same "lookup key, not a password" reasoning as every
+    # other agent API key).
+    raw_key = f"bastion_{secrets.token_urlsafe(32)}"
+    record = await db.create_agent(
+        org_id=user.org_id,
+        name=body.name,
+        api_key_hash=hash_api_key(raw_key),
+        policy_set_id=body.policy_set_id,
+    )
+    log.info("agent created", agent_id=str(record["id"]), org_id=str(user.org_id))
+    return CreateAgentResponse(**_agent_response(record).model_dump(), api_key=raw_key)
+
+
+@app.get("/agents")
+async def list_agents(user: AuthenticatedUser = require_any_role) -> list[AgentResponse]:
+    records = await db.list_agents(user.org_id)
+    return [_agent_response(r) for r in records]
+
+
+@app.patch("/agents/{agent_id}")
+async def update_agent(
+    agent_id: UUID,
+    body: UpdateAgentRequest,
+    request: Request,
+    user: AuthenticatedUser = require_admin,
+) -> AgentResponse:
+    if body.policy_set_id is not None and not await db.policy_set_belongs_to_org(
+        body.policy_set_id, user.org_id
+    ):
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": {
+                    "code": "POLICY_SET_NOT_FOUND",
+                    "message": f"no policy set {body.policy_set_id}",
+                    "request_id": request.state.request_id,
+                }
+            },
+        )
+    record = await db.update_agent_policy_set(agent_id, user.org_id, body.policy_set_id)
+    if record is None:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": {
+                    "code": "AGENT_NOT_FOUND",
+                    "message": f"no agent {agent_id}",
+                    "request_id": request.state.request_id,
+                }
+            },
+        )
+    return _agent_response(record)
 
 
 def _approval_response(record: Any) -> ApprovalRequestResponse:

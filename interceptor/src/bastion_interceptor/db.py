@@ -45,6 +45,51 @@ class Database:
             ),
         )
 
+    async def create_agent(
+        self, *, org_id: UUID, name: str, api_key_hash: str, policy_set_id: UUID | None
+    ) -> asyncpg.Record:
+        record = await self.pool.fetchrow(
+            """
+            INSERT INTO agents (org_id, name, api_key_hash, default_policy_set_id)
+            VALUES ($1, $2, $3, $4)
+            RETURNING id, org_id, name, default_policy_set_id, created_at
+            """,
+            org_id,
+            name,
+            api_key_hash,
+            policy_set_id,
+        )
+        assert record is not None
+        return record
+
+    async def list_agents(self, org_id: UUID) -> list[asyncpg.Record]:
+        return cast(
+            list[asyncpg.Record],
+            await self.pool.fetch(
+                "SELECT id, org_id, name, default_policy_set_id, created_at FROM agents "
+                "WHERE org_id = $1 ORDER BY created_at DESC",
+                org_id,
+            ),
+        )
+
+    async def update_agent_policy_set(
+        self, agent_id: UUID, org_id: UUID, policy_set_id: UUID | None
+    ) -> asyncpg.Record | None:
+        # org_id in the WHERE, not filtered from the response afterward —
+        # same check-before-mutate discipline as activate_policy (§ Phase 5
+        # bugfix in docs/PROGRESS.md): a cross-org caller can't reassign
+        # another org's agent even transiently.
+        return await self.pool.fetchrow(
+            """
+            UPDATE agents SET default_policy_set_id = $1
+            WHERE id = $2 AND org_id = $3
+            RETURNING id, org_id, name, default_policy_set_id, created_at
+            """,
+            policy_set_id,
+            agent_id,
+            org_id,
+        )
+
     async def insert_event(
         self,
         *,
@@ -121,6 +166,17 @@ class Database:
                 "SELECT * FROM policies WHERE policy_set_id = $1 AND active", policy_set_id
             ),
         )
+
+    async def policy_set_belongs_to_org(self, policy_set_id: UUID, org_id: UUID) -> bool:
+        """Guards agent creation/update: policy_set_id is a bare UUID in the
+        request body, so without this check a caller could assign another
+        org's policy_set_id to their own agent — same cross-org-FK class of
+        bug activate_policy's org check (docs/PROGRESS.md, Phase 5) exists
+        to prevent."""
+        row = await self.pool.fetchval(
+            "SELECT 1 FROM policy_sets WHERE id = $1 AND org_id = $2", policy_set_id, org_id
+        )
+        return row is not None
 
     async def list_policies(self, org_id: UUID) -> list[asyncpg.Record]:
         return cast(

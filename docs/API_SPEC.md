@@ -139,8 +139,18 @@ Prior to this, users were inserted directly via SQL in dev/tests (`docs/PROGRESS
 exists for tests and seed scripts, but real signup no longer requires it.
 
 ### Agents & Policies
-- `GET /agents` / `POST /agents` / `GET /agents/{id}` — **not yet built**; agents are
-  inserted directly via SQL (see `docs/PROGRESS.md`). Same non-spec gap as signup above.
+- `POST /agents` (role: `owner`/`admin`) — body: `{ "name": "...", "policy_set_id": "uuid | null" }`
+  → `AgentResponse` plus a one-time `api_key` field (raw key, `bastion_` prefix; only the SHA-256 hash
+  is ever stored, same as every other agent API key — there is no way to retrieve a lost key later, by
+  design). 404 `POLICY_SET_NOT_FOUND` if `policy_set_id` doesn't belong to the caller's org.
+- `GET /agents` (any role) — all agents for the caller's org; never includes `api_key`, only the
+  one-time create response does.
+- `PATCH /agents/{id}` (role: `owner`/`admin`) — body: `{ "policy_set_id": "uuid | null" }`, reassigns
+  which policy set an agent resolves to. Same org-ownership check-before-mutate discipline as
+  `POST /policies/{id}/activate`; 404 `AGENT_NOT_FOUND` / `POLICY_SET_NOT_FOUND` as appropriate.
+
+  Prior to this, agents were only ever inserted directly via SQL (`docs/PROGRESS.md`) — that path still
+  exists for tests and seed scripts, but a real caller no longer needs it.
 - `POST /policies` (role: `owner`/`admin`) — body: `{ "name": "...", "definition": [...] }`.
   Creates a new version (never mutates); compiles the definition immediately (400
   `INVALID_POLICY_CONDITION` on an unsafe/malformed condition expression, not a 500) even

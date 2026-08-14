@@ -7,6 +7,7 @@ The frontend (TypeScript) currently mirrors these by hand instead
 plan — see docs/ARCHITECTURE.md §16 and docs/api/DRIFT.md.
 """
 
+from .agents_api import AgentResponse, CreateAgentRequest, CreateAgentResponse, UpdateAgentRequest
 from .approvals import ApprovalRequestResponse, ApprovalStatus
 from .auth_api import LoginRequest, LogoutRequest, RefreshRequest, SignupRequest, TokenPairResponse
 from .errors import BastionError, ErrorDetail, ErrorResponse
@@ -46,6 +47,10 @@ from .realtime import (
 from .spans import CompleteSpanRequest, CompleteSpanResponse
 
 __all__ = [
+    "AgentResponse",
+    "CreateAgentRequest",
+    "CreateAgentResponse",
+    "UpdateAgentRequest",
     "ApprovalRequestResponse",
     "ApprovalStatus",
     "LoginRequest",

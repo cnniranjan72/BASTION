@@ -2,8 +2,8 @@
 
 ## Status: build complete, post-launch additions in progress
 All of `docs/BUILD_PLAN.md` (Phases 0-9) plus the final documentation set are done. Now working through
-user-requested follow-ups: signup/registration (done), Neon Postgres connection, Render deployment, UI
-polish.
+user-requested follow-ups: signup/registration (done), Neon Postgres connection (done), agents/policies/
+approvals management UI (done), Render deployment (next), UI visual polish.
 
 ## Log
 - [2026-08-14] Project specced out (PRD, ARCHITECTURE, DATA_MODEL, AUTH, API_SPEC, BUILD_PLAN written). No code yet.
@@ -506,8 +506,44 @@ polish.
   the test suite still default to Docker Compose Postgres per §7's original reasoning; Neon is wired up
   and ready for Render, not swapped in as the new local default.
 
+- [2026-08-14] Agents/policies/approvals management UI added (post-launch, user-requested — the "just
+  visual polish" scoping from a few messages earlier turned out to be the wrong diagnosis; the actual
+  gap was missing functionality):
+  - **The real problem, stated plainly**: the frontend was a viewer, not an operator console. Backend
+    had full agent/policy/approval management since Phase 2-3, but a brand-new signup landed on a live
+    3D graph with zero agents, zero traces, and "enter an agent_id and connect" as the only guidance —
+    there was no way to actually *use* the product through the UI without already knowing a raw UUID
+    that nothing in the UI could give you.
+  - **Backend**: `POST`/`GET /agents` + `PATCH /agents/{id}` (`shared/src/bastion_shared/agents_api.py`,
+    `interceptor/.../db.py`, `.../main.py`) — the real gap `docs/PROGRESS.md` had tracked since Phase 2
+    ("agents only ever creatable via SQL"), now closed. API keys are `bastion_`-prefixed
+    (`secrets.token_urlsafe(32)`, same entropy as refresh tokens), shown exactly once at creation, only
+    the SHA-256 hash ever stored — no way to retrieve a lost key later, by design. `policy_set_id` is
+    org-ownership-checked before assignment (`db.policy_set_belongs_to_org`) — same cross-org-FK class
+    of bug `activate_policy`'s Phase 5 fix already guarded against. 6 new tests
+    (`interceptor/tests/test_agents.py`), including one that proves a newly-created agent's *returned*
+    key actually authenticates a real `/intercept` call, not just that the create call succeeded.
+  - **Frontend**: three new pages (`AgentsPage.tsx`, `PoliciesPage.tsx`, `ApprovalsPage.tsx`) plus nav
+    links in `TopBar.tsx` between them and the existing live-graph `Dashboard`. Policy definitions are
+    edited as raw JSON in a textarea (pre-filled with a real example) rather than a visual rule builder
+    — a deliberate v1 scope call, not an oversight; a builder would be a lot more work for a DSL this
+    small. `Dashboard.tsx`'s "enter an agent_id" input became a real `<select>` populated from
+    `GET /agents` (falls back to manual entry if the list fails to load), and both the sidebar and the
+    empty graph area now show a real "create your first agent" path instead of a dead end when an org
+    has zero agents.
+  - **Verified against the real running app, not just written and assumed correct**: signed up a
+    genuinely new org through the actual UI, created an agent and confirmed the revealed key authenticates
+    (same proof as the backend test, this time end-to-end through the browser), created and activated a
+    policy and watched the version list update, then manufactured a real `require_approval` decision
+    (a fresh policy routing `db.delete` to a human) and drove it through the Approvals page — clicked
+    Approve, watched it clear from the pending list.
+  - `docs/API_SPEC.md` and the generated OpenAPI snapshot updated in the same change. Full 55-test
+    workspace suite passes (49 prior + 6 new agent tests), `ruff`/`mypy --strict` and frontend
+    `typecheck`/`lint` all clean.
+
 ## Next up
-- Render deployment, UI visual polish — in progress, user-requested.
+- Render deployment — next, now that the product itself (not just the backend) is actually usable
+  end-to-end. UI visual polish (the original, narrower ask) still pending after that.
 - If resumed after that: worth resetting/isolating the dev Postgres before anything latency-sensitive
   (thousands of accumulated `test-org-*` rows from every phase's test runs share the same dev DB) and
   building the CI-gated version of the API drift check `docs/api/DRIFT.md` describes but doesn't
@@ -533,10 +569,9 @@ polish.
 
 ## Open questions / decisions needed
 - None currently blocking. Things to revisit later:
-  - `POST /agents` and a signup/registration endpoint still don't exist — neither AUTH.md nor
-    API_SPEC.md specs one, so agents and users are both inserted directly via SQL in dev/tests. Worth
-    building real endpoints for both before any actual demo that isn't purely API-driven (Phase 8's
-    reference agent will need a real way to register itself).
+  - `POST /agents` and `POST /auth/signup` now both exist (post-launch additions, see the log below) —
+    agents and users are no longer SQL-only in dev/tests; that path still works and is still what tests
+    use for speed, but a real caller has a real endpoint for both now.
   - Frontend has no automated test suite yet (Phase 7 was verified manually in-browser). Worth adding
     at least component/store-logic tests before Phase 9 polish, given the two real bugs manual testing
     already caught that unit tests around the zustand selectors and force-simulation setup likely would

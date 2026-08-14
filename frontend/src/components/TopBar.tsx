@@ -1,7 +1,14 @@
-import { useNavigate } from "react-router-dom";
+import { NavLink, useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import { useAuthStore } from "../store/auth";
 import type { ConnectionStatus } from "../hooks/useLiveGraph";
+
+const NAV_LINKS = [
+  { to: "/", label: "Graph", end: true },
+  { to: "/agents", label: "Agents" },
+  { to: "/policies", label: "Policies" },
+  { to: "/approvals", label: "Approvals" },
+];
 
 const STATUS_LABEL: Record<ConnectionStatus, string> = {
   connecting: "Connecting…",
@@ -33,6 +40,18 @@ export function TopBar({ liveStatus }: TopBarProps) {
   return (
     <header className="topbar">
       <div className="topbar__brand">BASTION</div>
+      <nav className="topbar__nav">
+        {NAV_LINKS.map((link) => (
+          <NavLink
+            key={link.to}
+            to={link.to}
+            end={link.end}
+            className={({ isActive }) => `topbar__nav-link${isActive ? " is-active" : ""}`}
+          >
+            {link.label}
+          </NavLink>
+        ))}
+      </nav>
       {liveStatus && (
         <div className={`topbar__status topbar__status--${liveStatus}`}>
           <span className="topbar__status-dot" />
