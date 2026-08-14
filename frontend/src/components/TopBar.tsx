@@ -3,11 +3,14 @@ import { NavLink, useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import { useAuthStore } from "../store/auth";
 import { toast } from "../store/toast";
+import { useCommandPaletteStore } from "../store/commandPalette";
 import type { ConnectionStatus } from "../hooks/useLiveGraph";
 
 const NAV_LINKS = [
   { to: "/", label: "Overview", end: true },
   { to: "/graph", label: "Graph" },
+  { to: "/traces", label: "Traces" },
+  { to: "/analytics", label: "Analytics" },
   { to: "/agents", label: "Agents" },
   { to: "/policies", label: "Policies" },
   { to: "/approvals", label: "Approvals" },
@@ -29,6 +32,7 @@ export function TopBar({ liveStatus }: TopBarProps) {
   const { role, orgId, refreshToken, logout } = useAuthStore();
   const navigate = useNavigate();
   const [menuOpen, setMenuOpen] = useState(false);
+  const openPalette = useCommandPaletteStore((s) => s.toggle);
 
   async function handleLogout() {
     if (refreshToken) {
@@ -59,6 +63,11 @@ export function TopBar({ liveStatus }: TopBarProps) {
         <span />
         <span />
         <span />
+      </button>
+
+      <button className="topbar__search" onClick={openPalette} aria-label="Open command palette">
+        <span>Jump to…</span>
+        <kbd>⌘K</kbd>
       </button>
 
       <nav className={`topbar__nav${menuOpen ? " is-open" : ""}`}>

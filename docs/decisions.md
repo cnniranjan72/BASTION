@@ -52,6 +52,14 @@ on or correct earlier ones — noted where that happens).
   self-inflicted lockout — nobody left who could activate a policy, provision anyone, or undo the
   mistake — not blocked as "demotion" generally; promoting someone else to owner first, then demoting
   the original, still works.
+- **Traces/Analytics/command palette (post-launch, user-requested — "add more tabs features... loaded
+  yet meaningful product") stayed frontend-only, on purpose.** All three are built entirely from
+  `GET /traces`/`GET /agents`/`GET /approvals`, which already existed — no new backend endpoints, no new
+  aggregation service. Analytics' charts are three small hand-rolled SVG components rather than a
+  charting library dependency, since the data volumes involved (a trace list) never approach where a
+  library's bundle cost or virtualization would earn its keep. Keeping the addition to three pieces
+  instead of a longer list was itself a scope decision — the request explicitly asked for "meaningful,"
+  not maximal.
 - **Overview became the new "/" landing page, Graph moved to "/graph".** The product previously opened
   straight into the 3D live graph, which is compelling once you have an agent running but is a dead end
   for literally everyone's first session (zero agents, zero traces, nothing to look at). An at-a-glance

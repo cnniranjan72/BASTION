@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, ApiError } from "../api/client";
 import { useAuthStore } from "../store/auth";
+import { useCountUp } from "../hooks/useCountUp";
 import { TopBar } from "./TopBar";
 import type { Agent, ApprovalRequest, TraceSummary } from "../api/types";
 
@@ -23,9 +24,12 @@ function StatCard({
   value: string | number;
   tone?: "danger" | "warning";
 }) {
+  const numeric = typeof value === "number" ? value : null;
+  const animated = useCountUp(numeric ?? 0);
+  const display = numeric === null ? value : animated;
   return (
     <Link to={to} className={`stat-card${tone ? ` stat-card--${tone}` : ""}`}>
-      <span className="stat-card__value">{value}</span>
+      <span className="stat-card__value">{display}</span>
       <span className="stat-card__label">{label}</span>
     </Link>
   );

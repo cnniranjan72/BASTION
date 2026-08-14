@@ -163,12 +163,19 @@ Promoting a second owner first, then demoting the original, still works.
 
 ## Product surface
 
-Six pages behind one nav, each backed by real endpoints — not a mockup of a bigger product:
+Eight pages behind one nav, each backed by real endpoints — not a mockup of a bigger product — plus a
+⌘K command palette for jumping to any of them, an agent, or a recent trace without touching the mouse:
 
-- **Overview** (`/`) — agent/policy/approval/cost counts at a glance, recent traces, and an explicit
-  "create an agent → write a policy → watch it live" checklist for a brand-new org instead of a wall of
-  zeroes.
-- **Graph** (`/graph`) — the live/replayed 3D execution graph and 2D inspector described above.
+- **Overview** (`/`) — agent/policy/approval/cost counts at a glance (count up on load), recent traces,
+  and an explicit "create an agent → write a policy → watch it live" checklist for a brand-new org
+  instead of a wall of zeroes.
+- **Graph** (`/graph`) — the live/replayed 3D execution graph and 2D inspector described above. Accepts
+  a `?trace={id}` deep link from the Traces page to open a specific replay directly.
+- **Traces** (`/traces`) — every recorded trace, searchable by trace ID or agent, filterable by status
+  and agent, one click into full replay.
+- **Analytics** (`/analytics`) — calls and cost per day, a block-rate gauge, and top agents by call
+  volume, computed client-side from the same data Overview and Traces already fetch — no separate
+  aggregation backend.
 - **Agents** (`/agents`) — create an agent, see its API key exactly once, assign or reassign a policy.
 - **Policies** (`/policies`) — version history per policy, activate a version (hot-reloads every running
   interceptor, no restart).

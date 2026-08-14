@@ -3,7 +3,8 @@
 ## Status: build complete, post-launch additions in progress
 All of `docs/BUILD_PLAN.md` (Phases 0-9) plus the final documentation set are done. Now working through
 user-requested follow-ups: signup/registration (done), Neon Postgres connection (done), agents/policies/
-approvals management UI (done), visual design pass (done), Render deployment (next).
+approvals management UI (done), visual design pass (done), Team/RBAC + Overview (done), Traces/Analytics/
+command palette (done), Render deployment (next).
 
 ## Log
 - [2026-08-14] Project specced out (PRD, ARCHITECTURE, DATA_MODEL, AUTH, API_SPEC, BUILD_PLAN written). No code yet.
@@ -607,6 +608,44 @@ approvals management UI (done), visual design pass (done), Render deployment (ne
     mobile nav dropdown renders correctly at the new tab count.
   - `docs/API_SPEC.md` and the generated OpenAPI snapshot updated in the same change. Full 61-test
     backend suite passes (55 prior + 6 new), frontend `typecheck`/`lint` clean.
+
+- [2026-08-14] Traces, Analytics, and a command palette — three new pages/features (post-launch,
+  user-requested — "add more tabs features relevant focusive build... loaded yet meaningful product...
+  production design like a crazy interface"):
+  - **Scope call**: all three are frontend-only, built entirely on data the backend already exposes
+    (`GET /traces`, `GET /agents`, `GET /approvals`) — no new backend endpoints. The backend was already
+    assessed as solid in the prior Team/RBAC pass; the real gap was a frontend that hadn't caught up to
+    what the backend could already answer. Kept deliberately to three additions instead of a longer list
+    to stay "meaningful, not bloated" per the user's own framing.
+  - **Traces** (`/traces`) — every recorded trace, searchable by trace ID/agent name, filterable by
+    status and agent, row click deep-links into `/graph?trace={id}` for full replay. `Dashboard.tsx`
+    (the `/graph` route) now reads that query param via `useSearchParams`, opens the replay once, then
+    clears the param so it doesn't re-fire.
+  - **Analytics** (`/analytics`) — calls/cost per day (last 14 days), a block-rate donut gauge, and a
+    top-agents-by-calls bar list, all aggregated client-side from the same list endpoints Overview
+    already uses. Three small hand-rolled SVG chart components (`components/charts/`) instead of a
+    charting library dependency — trace-list-scale data (tens to low hundreds of points) is nowhere near
+    where a library's bundle cost or virtualization would pay for itself.
+  - **Command palette** (⌘K / Ctrl+K, `store/commandPalette.ts` + `CommandPalette.tsx`) — jump to any
+    page, agent, or one of the 8 most recent traces, filtered by a single search box, arrow-key/Enter
+    navigable. Mounted once in `App.tsx`, toggled from a zustand store (same free-standing-store pattern
+    as `toast.ts`) so both the global keyboard shortcut and a topbar button can open it without prop
+    drilling. Agent/trace data is fetched lazily on open, not on every page load.
+  - **Nav capacity, found live**: going from 6 to 8 top-level links meant the desktop nav bar started
+    crowding at real laptop widths well above the old 720px hamburger breakpoint. Moved the hamburger
+    collapse to 1100px (verified via the same forced-media-rule screenshot technique as the earlier
+    visual pass) rather than shrinking link padding, which would have made an already-dense bar harder
+    to read.
+  - **Overview polish**: stat cards now count up from 0 on load (`hooks/useCountUp.ts`, respects
+    `prefers-reduced-motion`) — a real polish detail, not load-bearing, since the underlying numeric
+    value used for links/logic is always the real one, never the mid-animation frame.
+  - **Verified live**: logged in as the seeded demo org, confirmed Traces' filters and the trace-row →
+    replay deep link both work (same graph render as the pre-existing sidebar click), confirmed
+    Analytics' charts render real aggregated numbers (25% block rate, 200 calls, matching the seeded
+    50-trace dataset), confirmed the command palette opens on Ctrl+K, filters correctly, and Enter
+    navigates, and re-confirmed the 8-link mobile hamburger dropdown renders correctly at the new
+    breakpoint.
+  - Frontend `typecheck`/`lint` clean. No backend changes, so no backend test run required.
 
 - [2026-08-14] README: architecture/flow diagrams + product-surface overview (post-launch, user-
   requested — "update the readme with more diagrams"):

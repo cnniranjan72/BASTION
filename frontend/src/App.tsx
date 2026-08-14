@@ -7,7 +7,10 @@ import { AgentsPage } from "./components/AgentsPage";
 import { PoliciesPage } from "./components/PoliciesPage";
 import { ApprovalsPage } from "./components/ApprovalsPage";
 import { TeamPage } from "./components/TeamPage";
+import { TracesPage } from "./components/TracesPage";
+import { AnalyticsPage } from "./components/AnalyticsPage";
 import { ToastHost } from "./components/ToastHost";
+import { CommandPalette } from "./components/CommandPalette";
 import { useAuthStore } from "./store/auth";
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
@@ -20,6 +23,7 @@ export function App() {
   return (
     <BrowserRouter>
       <ToastHost />
+      <CommandPalette />
       <Routes>
         <Route path="/login" element={<LoginPage />} />
         <Route path="/signup" element={<SignupPage />} />
@@ -60,6 +64,22 @@ export function App() {
           element={
             <RequireAuth>
               <ApprovalsPage />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/traces"
+          element={
+            <RequireAuth>
+              <TracesPage />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/analytics"
+          element={
+            <RequireAuth>
+              <AnalyticsPage />
             </RequireAuth>
           }
         />

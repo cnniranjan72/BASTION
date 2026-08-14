@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { api, ApiError } from "../api/client";
 import { useGraphStore } from "../store/graph";
 import { useLiveGraph } from "../hooks/useLiveGraph";
@@ -12,6 +12,7 @@ type ViewMode =
   { kind: "idle" } | { kind: "live"; agentId: string } | { kind: "replay"; traceId: string };
 
 export function Dashboard() {
+  const [searchParams, setSearchParams] = useSearchParams();
   const [mode, setMode] = useState<ViewMode>({ kind: "idle" });
   const [agentIdInput, setAgentIdInput] = useState("");
   const [agents, setAgents] = useState<Agent[]>([]);
@@ -66,6 +67,17 @@ export function Dashboard() {
     reset();
     setMode({ kind: "live", agentId: agentIdInput.trim() });
   }
+
+  // Deep link from the Traces page (/graph?trace=<id>) — open replay once,
+  // then drop the query param so it doesn't re-fire on later state changes.
+  useEffect(() => {
+    const traceId = searchParams.get("trace");
+    if (traceId) {
+      openReplay(traceId);
+      setSearchParams({}, { replace: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
 
   return (
     <div className="dashboard">
