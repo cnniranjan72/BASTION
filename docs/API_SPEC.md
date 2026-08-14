@@ -127,10 +127,16 @@ and "exists but isn't yours" look identical to the caller.
   `REFRESH_TOKEN_REUSED`), forcing full re-login — this is what makes rotation meaningful
   against a stolen token (AUTH.md §2).
 - `POST /auth/logout` — `{ "refresh_token": "..." }` → revokes the whole family.
+- `POST /auth/signup` (added post-Phase-9) — `{ "org_name": "...", "email": "...", "password": "..." }`
+  → creates a **brand-new organization** plus its first user (role `owner`), then returns the same
+  `TokenPairResponse` shape as login (auto-login after signup). 201 on success; 409
+  `EMAIL_ALREADY_REGISTERED` if the email is already in use (`email` is globally unique, not per-org —
+  migration `0005_users_auth.sql`); 422 on a password under 8 characters or a malformed email. This is
+  always a *new* org — there's no invite/join flow, since joining an existing org via a bare email +
+  password with no invite token would let anyone add themselves to any org they knew the name of.
 
-No signup endpoint — AUTH.md doesn't spec one, and none of the phases call for it. Users are
-inserted directly via SQL in dev/tests (`docs/PROGRESS.md`); `POST /users` would be natural
-Phase-5-adjacent scope if a real registration flow is ever needed.
+Prior to this, users were inserted directly via SQL in dev/tests (`docs/PROGRESS.md`) — that path still
+exists for tests and seed scripts, but real signup no longer requires it.
 
 ### Agents & Policies
 - `GET /agents` / `POST /agents` / `GET /agents/{id}` — **not yet built**; agents are

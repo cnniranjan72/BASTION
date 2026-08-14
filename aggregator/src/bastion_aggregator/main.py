@@ -153,12 +153,24 @@ async def http_exception_handler(request: Request, exc: HTTPException) -> JSONRe
     return JSONResponse(status_code=exc.status_code, content=body)
 
 
+def _format_validation_errors(exc: RequestValidationError) -> str:
+    # Same reasoning as interceptor/src/bastion_interceptor/main.py's
+    # identical helper: str(exc.errors()) used to dump a raw Python repr
+    # straight into the user-facing error message.
+    parts = []
+    for error in exc.errors():
+        loc = ".".join(str(part) for part in error["loc"] if part != "body")
+        parts.append(f"{loc}: {error['msg']}" if loc else error["msg"])
+    return "; ".join(parts) if parts else "invalid request"
+
+
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(
     request: Request, exc: RequestValidationError
 ) -> JSONResponse:
     return JSONResponse(
-        status_code=422, content=_error_body(request, "VALIDATION_ERROR", str(exc.errors()))
+        status_code=422,
+        content=_error_body(request, "VALIDATION_ERROR", _format_validation_errors(exc)),
     )
 
 

@@ -295,6 +295,31 @@ class Database:
 
     # -- Human auth (Phase 5) --------------------------------------------
 
+    async def create_org_and_owner(
+        self, *, org_name: str, email: str, password_hash: str
+    ) -> asyncpg.Record:
+        """Self-serve signup: a brand-new org plus its first user (role
+        owner), one transaction. `email` is globally UNIQUE (not scoped to
+        org — see migration 0005), so a duplicate raises
+        asyncpg.UniqueViolationError; the caller (main.py) translates that
+        into a 409, not a raw 500."""
+        async with self.pool.acquire() as conn, conn.transaction():
+            org_id = await conn.fetchval(
+                "INSERT INTO organizations (name) VALUES ($1) RETURNING id", org_name
+            )
+            record = await conn.fetchrow(
+                """
+                INSERT INTO users (org_id, email, password_hash, role)
+                VALUES ($1, $2, $3, 'owner')
+                RETURNING *
+                """,
+                org_id,
+                email,
+                password_hash,
+            )
+            assert record is not None
+            return record
+
     async def get_user_by_email(self, email: str) -> asyncpg.Record | None:
         return cast(
             "asyncpg.Record | None",

@@ -26,7 +26,14 @@ on or correct earlier ones — noted where that happens).
 - **API_SPEC.md's `/api/v1` base URL never existed in the actual code** (`docs/api/DRIFT.md`) — a
   spec-vs-implementation drift caught during Phase 11's documentation pass, not an architecture decision
   with reasoning behind it. Fixed by correcting the doc to match the real bare-path routing.
-- **`POST /agents` and a signup endpoint still don't exist.** Neither AUTH.md nor API_SPEC.md ever
-  specced either; every phase's tests and seed scripts insert agents/users directly via SQL instead
+- **`POST /agents` still doesn't exist** (signup now does, see below). Neither AUTH.md nor API_SPEC.md
+  ever specced either; every phase's tests and seed scripts insert agents directly via SQL instead
   (documented per-fixture, e.g. `interceptor/tests/conftest.py`'s `test_agent`). Open, not forgotten —
   tracked in `docs/PROGRESS.md`'s "Open questions" section.
+- **`POST /auth/signup` (post-launch, user-requested) is always a new-org signup, never a join.**
+  A bare email+password join of an existing org (no invite token) would let anyone add themselves to
+  any org they knew the name of — self-serve "create a new org" is the only flow that's safe without
+  building invite infrastructure that was never specced. Auto-logs in after signup, same token-issuing
+  path as `/auth/login`. Found a real, pre-existing bug while testing this live: both services' 422
+  validation-error handler dumped a raw Python repr into user-facing error messages — fixed, not
+  signup-specific but only surfaced once a real form existed to trigger it through.

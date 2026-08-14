@@ -108,6 +108,24 @@ input:focus {
   font-size: 0.8rem;
   margin: 0;
 }
+.login-card__hint {
+  color: var(--text-dim);
+  font-size: 0.75rem;
+  margin: -0.3rem 0 0;
+}
+.login-card__switch {
+  color: var(--text-dim);
+  font-size: 0.8rem;
+  margin: 0.5rem 0 0;
+  text-align: center;
+}
+.login-card__switch a {
+  color: var(--accent);
+  text-decoration: none;
+}
+.login-card__switch a:hover {
+  text-decoration: underline;
+}
 
 /* Layout */
 .dashboard {

@@ -4,9 +4,10 @@ import { Link, useNavigate } from "react-router-dom";
 import { api, ApiError } from "../api/client";
 import { useAuthStore } from "../store/auth";
 
-export function LoginPage() {
+export function SignupPage() {
   const setTokens = useAuthStore((s) => s.setTokens);
   const navigate = useNavigate();
+  const [orgName, setOrgName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -17,11 +18,11 @@ export function LoginPage() {
     setError(null);
     setSubmitting(true);
     try {
-      const tokens = await api.login(email, password);
+      const tokens = await api.signup(orgName, email, password);
       setTokens(tokens);
       navigate("/");
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Login failed");
+      setError(err instanceof ApiError ? err.message : "Signup failed");
     } finally {
       setSubmitting(false);
     }
@@ -31,7 +32,17 @@ export function LoginPage() {
     <div className="login-page">
       <form className="login-card" onSubmit={handleSubmit}>
         <h1>BASTION</h1>
-        <p className="login-card__subtitle">AI agent control plane</p>
+        <p className="login-card__subtitle">Create your organization</p>
+
+        <label htmlFor="org_name">Organization name</label>
+        <input
+          id="org_name"
+          type="text"
+          autoComplete="organization"
+          value={orgName}
+          onChange={(e) => setOrgName(e.target.value)}
+          required
+        />
 
         <label htmlFor="email">Email</label>
         <input
@@ -47,20 +58,22 @@ export function LoginPage() {
         <input
           id="password"
           type="password"
-          autoComplete="current-password"
+          autoComplete="new-password"
+          minLength={8}
           value={password}
           onChange={(e) => setPassword(e.target.value)}
           required
         />
+        <p className="login-card__hint">At least 8 characters. You'll be the org owner.</p>
 
         {error && <p className="login-card__error">{error}</p>}
 
         <button type="submit" disabled={submitting}>
-          {submitting ? "Signing in…" : "Sign in"}
+          {submitting ? "Creating account…" : "Create account"}
         </button>
 
         <p className="login-card__switch">
-          New here? <Link to="/signup">Create an organization</Link>
+          Already have an account? <Link to="/login">Sign in</Link>
         </p>
       </form>
     </div>

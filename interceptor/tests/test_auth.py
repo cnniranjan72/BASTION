@@ -5,6 +5,7 @@ login, RBAC, and logout — the other pieces of AUTH.md §2.
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import Awaitable, Callable
 
 import httpx
@@ -16,6 +17,71 @@ def _http_client() -> httpx.AsyncClient:
     return httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://interceptor.test"
     )
+
+
+async def test_signup_creates_org_and_owner_and_logs_in() -> None:
+    uuid_str = uuid.uuid4().hex
+    async with _http_client() as http:
+        response = await http.post(
+            "/auth/signup",
+            json={
+                "org_name": f"signup-test-{uuid_str}",
+                "email": f"{uuid_str}@example.com",
+                "password": "correct horse battery staple",
+            },
+        )
+    assert response.status_code == 201
+    body = response.json()
+    assert body["role"] == "owner"
+    assert body["access_token"]
+    assert body["refresh_token"]
+
+
+async def test_signup_rejects_duplicate_email() -> None:
+    uuid_str = uuid.uuid4().hex
+    payload = {
+        "org_name": f"signup-test-{uuid_str}",
+        "email": f"{uuid_str}@example.com",
+        "password": "correct horse battery staple",
+    }
+    async with _http_client() as http:
+        first = await http.post("/auth/signup", json=payload)
+        assert first.status_code == 201
+        second = await http.post(
+            "/auth/signup", json={**payload, "org_name": "a-different-org-name"}
+        )
+    assert second.status_code == 409
+    assert second.json()["error"]["code"] == "EMAIL_ALREADY_REGISTERED"
+
+
+async def test_signup_rejects_short_password() -> None:
+    uuid_str = uuid.uuid4().hex
+    async with _http_client() as http:
+        response = await http.post(
+            "/auth/signup",
+            json={
+                "org_name": f"signup-test-{uuid_str}",
+                "email": f"{uuid_str}@example.com",
+                "password": "short",
+            },
+        )
+    assert response.status_code == 422
+
+
+async def test_validation_error_message_is_human_readable_not_a_raw_repr() -> None:
+    """Regression test: the 422 handler used to do str(exc.errors()), which
+    dumped a raw Python list-of-dicts repr (complete with Python-style
+    single-quotes) straight into the error message shown to end users —
+    found while clicking through the real signup form."""
+    async with _http_client() as http:
+        response = await http.post(
+            "/auth/signup",
+            json={"org_name": "x", "email": "not-an-email", "password": "correct horse battery"},
+        )
+    assert response.status_code == 422
+    message = response.json()["error"]["message"]
+    assert "email" in message
+    assert not message.startswith("[{")  # the old raw-repr format
 
 
 async def test_login_succeeds_with_correct_credentials(

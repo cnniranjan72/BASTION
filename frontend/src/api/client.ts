@@ -99,6 +99,11 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ email, password }),
     }),
+  signup: (orgName: string, email: string, password: string) =>
+    request<TokenPairResponse>(INTERCEPTOR_BASE, "/auth/signup", {
+      method: "POST",
+      body: JSON.stringify({ org_name: orgName, email, password }),
+    }),
   logout: (refresh_token: string) =>
     request<{ status: string }>(INTERCEPTOR_BASE, "/auth/logout", {
       method: "POST",

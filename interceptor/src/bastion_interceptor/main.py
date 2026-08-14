@@ -40,6 +40,7 @@ from pathlib import Path
 from typing import Any, Literal
 from uuid import UUID
 
+import asyncpg
 import structlog
 from bastion_shared import (
     AccessTokenClaims,
@@ -59,6 +60,7 @@ from bastion_shared import (
     PolicyDecisionPayload,
     PolicyResponse,
     RefreshRequest,
+    SignupRequest,
     TokenPairResponse,
     UserRole,
     encode_access_token,
@@ -72,7 +74,7 @@ from . import policy as policy_engine
 from .auth import AuthenticatedAgent, authenticate_agent
 from .config import config
 from .db import db
-from .human_auth import AuthenticatedUser, require_role, verify_password
+from .human_auth import AuthenticatedUser, hash_password, require_role, verify_password
 from .logging import configure_logging, log
 from .metrics import intercept_latency_seconds, policy_decisions_total
 from .redis_bus import redis_bus
@@ -164,12 +166,25 @@ async def http_exception_handler(request: Request, exc: HTTPException) -> JSONRe
     return JSONResponse(status_code=exc.status_code, content=body)
 
 
+def _format_validation_errors(exc: RequestValidationError) -> str:
+    # exc.errors() is a list of {"loc": ("body", "email"), "msg": "...", ...}
+    # dicts — str()'ing the whole thing (the previous behavior) dumped a raw
+    # Python repr straight into the error message shown to users, e.g. in
+    # the signup form. "field: message", joined, is what a human wants.
+    parts = []
+    for error in exc.errors():
+        loc = ".".join(str(part) for part in error["loc"] if part != "body")
+        parts.append(f"{loc}: {error['msg']}" if loc else error["msg"])
+    return "; ".join(parts) if parts else "invalid request"
+
+
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(
     request: Request, exc: RequestValidationError
 ) -> JSONResponse:
     return JSONResponse(
-        status_code=422, content=_error_body(request, "VALIDATION_ERROR", str(exc.errors()))
+        status_code=422,
+        content=_error_body(request, "VALIDATION_ERROR", _format_validation_errors(exc)),
     )
 
 
@@ -206,6 +221,41 @@ async def healthz() -> dict[str, str]:
 @app.get("/metrics", include_in_schema=False)
 async def metrics() -> Response:
     return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
+
+@app.post("/auth/signup", status_code=201)
+async def signup(body: SignupRequest, request: Request) -> TokenPairResponse:
+    """Self-serve: creates a brand-new org + its first user (role owner),
+    then logs them in immediately — same token-issuing path as /auth/login,
+    just with a fresh account instead of an existing one. No invite flow;
+    every signup is a new org, never a join of an existing one (AUTH.md/
+    API_SPEC.md never specced either, and joining an org via a bare email+
+    password with no invite token would be a real security hole — anyone
+    could add themselves to any org they knew the name of)."""
+    try:
+        user = await db.create_org_and_owner(
+            org_name=body.org_name, email=body.email, password_hash=hash_password(body.password)
+        )
+    except asyncpg.UniqueViolationError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": {
+                    "code": "EMAIL_ALREADY_REGISTERED",
+                    "message": "an account with this email already exists",
+                    "request_id": request.state.request_id,
+                }
+            },
+        ) from exc
+
+    family_id = uuid.uuid4()
+    response, token_hash = _issue_token_pair(user, family_id)
+    expires_at = datetime.now(UTC) + timedelta(days=config.refresh_token_ttl_days)
+    await db.insert_refresh_token(
+        user_id=user["id"], token_hash=token_hash, family_id=family_id, expires_at=expires_at
+    )
+    log.info("signup", user_id=str(user["id"]), org_id=str(user["org_id"]))
+    return response
 
 
 @app.post("/auth/login")

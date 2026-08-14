@@ -1,5 +1,6 @@
 import { Navigate, Route, BrowserRouter, Routes } from "react-router-dom";
 import { LoginPage } from "./components/LoginPage";
+import { SignupPage } from "./components/SignupPage";
 import { Dashboard } from "./components/Dashboard";
 import { useAuthStore } from "./store/auth";
 
@@ -14,6 +15,7 @@ export function App() {
     <BrowserRouter>
       <Routes>
         <Route path="/login" element={<LoginPage />} />
+        <Route path="/signup" element={<SignupPage />} />
         <Route
           path="/"
           element={

@@ -1,8 +1,9 @@
 # BASTION — Progress Log
 
-## Status: build complete
-All of `docs/BUILD_PLAN.md` (Phases 0-9) plus the final documentation set are done. Nothing currently
-in progress.
+## Status: build complete, post-launch additions in progress
+All of `docs/BUILD_PLAN.md` (Phases 0-9) plus the final documentation set are done. Now working through
+user-requested follow-ups: signup/registration (done), Neon Postgres connection, Render deployment, UI
+polish.
 
 ## Log
 - [2026-08-14] Project specced out (PRD, ARCHITECTURE, DATA_MODEL, AUTH, API_SPEC, BUILD_PLAN written). No code yet.
@@ -467,11 +468,41 @@ in progress.
     exact commands to reproduce it. Cross-checked one factual claim before publishing: BUILD_PLAN.md has
     Phases 0 through 9 (ten phases, zero-indexed), not nine — corrected before this went in, not after.
 
+- [2026-08-14] Signup/registration added (post-launch, user-requested):
+  - `POST /auth/signup` (`interceptor/src/bastion_interceptor/main.py`): creates a brand-new org + its
+    first user (role `owner`) in one transaction (`db.create_org_and_owner`), then issues a token pair
+    the same way `/auth/login` does — auto-login after signup. Always a new org, no invite/join flow
+    (joining an existing org via bare email+password with no invite token would be a real security
+    hole). `SignupRequest` (`shared/src/bastion_shared/auth_api.py`) uses `EmailStr` (added
+    `pydantic[email]` dependency) and an 8-character password minimum — no policy was specced anywhere,
+    this is a reasonable default stated as such, not copied from a doc that doesn't exist.
+  - Frontend: `SignupPage.tsx`, linked from `LoginPage.tsx` and back, `api.signup()` in `client.ts`,
+    `/signup` route in `App.tsx`. Verified live: created a genuinely new, isolated org through the real
+    UI, confirmed it landed on an empty dashboard (no cross-org data), not just that the request
+    succeeded.
+  - **Real bug found and fixed while testing this live, not hypothetical**: the 422 validation-error
+    handler on *both* interceptor and aggregator did `str(exc.errors())`, dumping FastAPI's raw
+    Python list-of-dicts repr straight into the user-facing error message — hit immediately by typing an
+    invalid email into the real signup form and seeing a wall of `[{'type': 'value_error', 'loc': ...}]`
+    instead of a sentence. This bug predates signup entirely (it's the generic body-validation handler,
+    would have hit any endpoint with a malformed request) but had never been noticed because nothing
+    before this exercised 422s through an actual UI form. Fixed in both services
+    (`_format_validation_errors`, `"field: message"` joined by `"; "`), regression-tested
+    (`test_validation_error_message_is_human_readable_not_a_raw_repr`), reconfirmed clean in the browser.
+  - Also corrected: `shared/src/bastion_shared/__init__.py`'s module docstring claimed the frontend
+    types were "generated from the FastAPI-produced OpenAPI schema" — false since Phase 7 (they're
+    hand-written, documented as a real gap in §16/`docs/api/DRIFT.md`) and apparently never fixed when
+    that gap was found. Fixed while in the file for an unrelated change, not a dedicated pass — worth
+    noting in case other stale claims like this exist elsewhere.
+  - 14 auth tests passing (11 existing + 3 new signup tests + 1 new validation-message regression test),
+    `docs/API_SPEC.md` and `docs/api/*.openapi.json` updated in the same change, not left to drift again.
+
 ## Next up
-- Nothing currently planned. If resumed: worth resetting/isolating the dev Postgres before anything
-  latency-sensitive (thousands of accumulated `test-org-*` rows from every phase's test runs share the
-  same dev DB) and building the CI-gated version of the API drift check `docs/api/DRIFT.md` describes
-  but doesn't implement.
+- Neon Postgres connection, Render deployment, UI visual polish — in progress, user-requested.
+- If resumed after that: worth resetting/isolating the dev Postgres before anything latency-sensitive
+  (thousands of accumulated `test-org-*` rows from every phase's test runs share the same dev DB) and
+  building the CI-gated version of the API drift check `docs/api/DRIFT.md` describes but doesn't
+  implement.
 
 ## Known deviations from BUILD_PLAN.md
 - None in phase *order*. Implementation-level deviations from the original spec docs, all flagged in

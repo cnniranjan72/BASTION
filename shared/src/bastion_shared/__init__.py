@@ -2,13 +2,13 @@
 
 Every service (interceptor, aggregator) and the Python SDK import these
 models directly, so the event/policy/API shape cannot drift between them.
-The frontend (TypeScript) is kept in sync separately, by generating types
-from the FastAPI-produced OpenAPI schema rather than duplicating models by
-hand — see docs/ARCHITECTURE.md §7 (Language & schema decisions).
+The frontend (TypeScript) currently mirrors these by hand instead
+(`frontend/src/api/types.ts`) — a real, documented gap, not the original
+plan — see docs/ARCHITECTURE.md §16 and docs/api/DRIFT.md.
 """
 
 from .approvals import ApprovalRequestResponse, ApprovalStatus
-from .auth_api import LoginRequest, LogoutRequest, RefreshRequest, TokenPairResponse
+from .auth_api import LoginRequest, LogoutRequest, RefreshRequest, SignupRequest, TokenPairResponse
 from .errors import BastionError, ErrorDetail, ErrorResponse
 from .events import (
     CallAttemptedPayload,
@@ -51,6 +51,7 @@ __all__ = [
     "LoginRequest",
     "LogoutRequest",
     "RefreshRequest",
+    "SignupRequest",
     "TokenPairResponse",
     "BastionError",
     "ErrorDetail",

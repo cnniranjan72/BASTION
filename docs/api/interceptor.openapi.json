@@ -27,6 +27,45 @@
                 }
             }
         },
+        "/auth/signup": {
+            "post": {
+                "summary": "Signup",
+                "description": "Self-serve: creates a brand-new org + its first user (role owner),\nthen logs them in immediately \u00e2\u20ac\u201d same token-issuing path as /auth/login,\njust with a fresh account instead of an existing one. No invite flow;\nevery signup is a new org, never a join of an existing one (AUTH.md/\nAPI_SPEC.md never specced either, and joining an org via a bare email+\npassword with no invite token would be a real security hole \u00e2\u20ac\u201d anyone\ncould add themselves to any org they knew the name of).",
+                "operationId": "signup_auth_signup_post",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/SignupRequest"
+                            }
+                        }
+                    },
+                    "required": true
+                },
+                "responses": {
+                    "201": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/TokenPairResponse"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/HTTPValidationError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/auth/login": {
             "post": {
                 "summary": "Login",
@@ -1162,6 +1201,34 @@
                     "refresh_token"
                 ],
                 "title": "RefreshRequest"
+            },
+            "SignupRequest": {
+                "properties": {
+                    "org_name": {
+                        "type": "string",
+                        "maxLength": 200,
+                        "minLength": 1,
+                        "title": "Org Name"
+                    },
+                    "email": {
+                        "type": "string",
+                        "format": "email",
+                        "title": "Email"
+                    },
+                    "password": {
+                        "type": "string",
+                        "minLength": 8,
+                        "title": "Password"
+                    }
+                },
+                "type": "object",
+                "required": [
+                    "org_name",
+                    "email",
+                    "password"
+                ],
+                "title": "SignupRequest",
+                "description": "Creates a brand-new organization and its first user (role: owner),\nthen logs them in immediately \u00e2\u20ac\u201d self-serve signup, not an invite flow.\nNo password policy was specced anywhere (AUTH.md, API_SPEC.md); an\n8-character minimum is a reasonable default, not a documented\nrequirement copied from elsewhere."
             },
             "TokenPairResponse": {
                 "properties": {
