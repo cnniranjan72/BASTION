@@ -26,7 +26,7 @@ def load_config() -> Config:
         database_url=os.environ.get(
             "DATABASE_URL", "postgresql://bastion:bastion@localhost:5442/bastion"
         ),
-        redis_url=os.environ.get("REDIS_URL", "redis://localhost:6379"),
+        redis_url=os.environ.get("REDIS_URL", "redis://localhost:6389"),
         env=os.environ.get("NODE_ENV", "development"),
         jwt_public_key_path=os.environ.get(
             "JWT_PUBLIC_KEY_PATH", str(_REPO_ROOT / "infra" / "keys" / "jwt_public.pem")

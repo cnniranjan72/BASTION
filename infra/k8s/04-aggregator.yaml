@@ -1,0 +1,89 @@
+# Aggregator scaling story is different from the interceptor's, and worth
+# spelling out: each replica opens its own Postgres LISTEN connection
+# (listener.py) and holds its own WebSocket clients in memory
+# (ConnectionManager, keyed by agent_id). Postgres NOTIFY broadcasts to
+# *every* listening connection, not just one — so every replica
+# independently receives the same event stream and pushes to whichever
+# clients happen to be connected to *that* replica. No shared fan-out layer
+# (e.g. Redis pub/sub between aggregator replicas) is needed for this to be
+# correct: a client connected to replica B still sees every update, because
+# replica B got the same NOTIFY replica A did, straight from Postgres. The
+# `active_traces` in-memory dict (Phase 4) is per-replica for the same
+# reason it's fine for it to be — it's a rebuildable cache of running
+# traces, not a source of truth (GET /traces/{id} falls back to folding
+# events fresh either way), so a replica restarting or a client landing on
+# a different replica than a previous request never sees stale data, just
+# a slightly cold cache that refills itself.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bastion-aggregator
+  namespace: bastion
+  labels:
+    app: bastion-aggregator
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: bastion-aggregator
+  template:
+    metadata:
+      labels:
+        app: bastion-aggregator
+    spec:
+      containers:
+        - name: aggregator
+          image: bastion-aggregator:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 4002
+          envFrom:
+            - configMapRef:
+                name: bastion-config
+            - secretRef:
+                name: bastion-db-redis
+          volumeMounts:
+            - name: jwt-public-key
+              mountPath: /etc/bastion/keys
+              readOnly: true
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 4002
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 4002
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+      volumes:
+        # Aggregator only ever verifies JWTs (AUTH.md: "without calling the
+        # auth service"), never signs them — mounts only the public key,
+        # not the full bastion-jwt-keys secret the interceptor uses.
+        - name: jwt-public-key
+          secret:
+            secretName: bastion-jwt-keys
+            items:
+              - key: jwt_public.pem
+                path: jwt_public.pem
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: bastion-aggregator
+  namespace: bastion
+spec:
+  selector:
+    app: bastion-aggregator
+  ports:
+    - port: 4002
+      targetPort: 4002

@@ -37,7 +37,7 @@ def load_config() -> Config:
         database_url=os.environ.get(
             "DATABASE_URL", "postgresql://bastion:bastion@localhost:5442/bastion"
         ),
-        redis_url=os.environ.get("REDIS_URL", "redis://localhost:6379"),
+        redis_url=os.environ.get("REDIS_URL", "redis://localhost:6389"),
         env=os.environ.get("NODE_ENV", "development"),
         approval_ttl_seconds=float(os.environ.get("APPROVAL_TTL_SECONDS", "300")),
         approval_long_poll_seconds=float(os.environ.get("APPROVAL_LONG_POLL_SECONDS", "25")),

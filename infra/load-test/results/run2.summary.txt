@@ -1,0 +1,25 @@
+
+    ✓ status is 200
+    ✓ decision is allowed
+
+    HTTP
+    http_req_duration..............: avg=21.35ms min=11.3ms med=18.91ms max=59.37ms p(90)=32.67ms p(95)=38.74ms
+      { expected_response:true }...: avg=21.35ms min=11.3ms med=18.91ms max=59.37ms p(90)=32.67ms p(95)=38.74ms
+    http_req_failed................: 0.00%  0 out of 1501
+    http_reqs......................: 1501   49.928701/s
+
+    EXECUTION
+    iteration_duration.............: avg=21.88ms min=11.6ms med=19.46ms max=59.91ms p(90)=33.07ms p(95)=39.52ms
+    iterations.....................: 1501   49.928701/s
+    vus............................: 1      min=0         max=2 
+    vus_max........................: 20     min=20        max=20
+
+    NETWORK
+    data_received..................: 471 kB 16 kB/s
+    data_sent......................: 564 kB 19 kB/s
+
+
+
+
+running (0m30.1s), 000/020 VUs, 1501 complete and 0 interrupted iterations
+steady_load ✓ [ 100% ] 000/020 VUs  30s  50.00 iters/s

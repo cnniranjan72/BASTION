@@ -1,0 +1,25 @@
+    ✓ status is 200
+    ✓ decision is allowed
+
+    HTTP
+    http_req_duration..............: avg=22.43ms min=11.72ms med=20.3ms  max=66.77ms p(90)=33.71ms p(95)=39.29ms
+      { expected_response:true }...: avg=22.43ms min=11.72ms med=20.3ms  max=66.77ms p(90)=33.71ms p(95)=39.29ms
+    http_req_failed................: 0.00%  0 out of 1501
+    http_reqs......................: 1501   49.949512/s
+
+    EXECUTION
+    iteration_duration.............: avg=23.01ms min=12.07ms med=20.89ms max=68.04ms p(90)=34.47ms p(95)=40.17ms
+    iterations.....................: 1501   49.949512/s
+    vus............................: 1      min=0         max=3 
+    vus_max........................: 20     min=20        max=20
+
+    NETWORK
+    data_received..................: 471 kB 16 kB/s
+    data_sent......................: 564 kB 19 kB/s
+
+
+
+
+running (0m30.1s), 000/020 VUs, 1501 complete and 0 interrupted iterations
+steady_load ✓ [ 100% ] 000/020 VUs  30s  50.00 iters/s
+time="2026-08-14T04:36:15Z" level=error msg="thresholds on metrics 'http_req_duration' have been crossed"

@@ -66,6 +66,7 @@ from bastion_shared import (
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from . import policy as policy_engine
 from .auth import AuthenticatedAgent, authenticate_agent
@@ -73,6 +74,7 @@ from .config import config
 from .db import db
 from .human_auth import AuthenticatedUser, require_role, verify_password
 from .logging import configure_logging, log
+from .metrics import intercept_latency_seconds, policy_decisions_total
 from .redis_bus import redis_bus
 
 STATIC_DIR = Path(__file__).resolve().parent.parent.parent / "static"
@@ -201,6 +203,11 @@ async def healthz() -> dict[str, str]:
     return {"status": "ok", "service": "interceptor"}
 
 
+@app.get("/metrics", include_in_schema=False)
+async def metrics() -> Response:
+    return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
+
 @app.post("/auth/login")
 async def login(body: LoginRequest, request: Request) -> TokenPairResponse:
     user = await db.get_user_by_email(body.email)
@@ -312,6 +319,15 @@ async def intercept(
     request: Request,
     agent: AuthenticatedAgent = Depends(authenticate_agent),
 ) -> InterceptAllowedResponse | InterceptBlockedResponse | InterceptPendingResponse:
+    with intercept_latency_seconds.time():
+        return await _intercept(body, request, agent)
+
+
+async def _intercept(
+    body: InterceptRequest,
+    request: Request,
+    agent: AuthenticatedAgent,
+) -> InterceptAllowedResponse | InterceptBlockedResponse | InterceptPendingResponse:
     if body.agent_id != agent.id:
         raise HTTPException(
             status_code=403,
@@ -352,6 +368,7 @@ async def intercept(
         )
         approval = await db.insert_approval_request(trace_id=body.trace_id, span_id=span_id)
         log.info("call pending approval", tool_name=body.tool_name, span_id=str(span_id))
+        policy_decisions_total.labels(decision="pending_approval").inc()
         return InterceptPendingResponse(
             span_id=span_id,
             approval_request_id=approval["id"],
@@ -371,6 +388,7 @@ async def intercept(
             ).model_dump(mode="json"),
         )
         log.info("call blocked", tool_name=body.tool_name, span_id=str(span_id), reason=reason)
+        policy_decisions_total.labels(decision="blocked").inc()
         return InterceptBlockedResponse(span_id=span_id, policy_id=policy_id, reason=reason)
 
     await db.insert_event(
@@ -384,6 +402,7 @@ async def intercept(
         ),
     )
     log.info("call allowed", tool_name=body.tool_name, span_id=str(span_id))
+    policy_decisions_total.labels(decision="allowed").inc()
     return InterceptAllowedResponse(span_id=span_id, policy_id=policy_id, result=None)
 
 

@@ -28,7 +28,7 @@ The Python side (`shared`, `interceptor`, `aggregator`, `sdk-python`) is a singl
 installs.
 
 ```bash
-docker compose -f infra/docker/docker-compose.yml up -d   # Postgres (host :5442) + Redis (:6379)
+docker compose -f infra/docker/docker-compose.yml up -d   # Postgres (host :5442) + Redis (host :6389)
 
 uv sync --all-packages --all-extras --dev
 uv run ruff check .

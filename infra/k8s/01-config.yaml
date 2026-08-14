@@ -1,0 +1,13 @@
+# Non-secret configuration only. Actual secrets (DATABASE_URL, REDIS_URL,
+# JWT key material) live in Secrets — see 02-secrets.example.yaml — never
+# here and never committed with real values.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: bastion-config
+  namespace: bastion
+data:
+  JWT_PRIVATE_KEY_PATH: /etc/bastion/keys/jwt_private.pem
+  JWT_PUBLIC_KEY_PATH: /etc/bastion/keys/jwt_public.pem
+  INTERCEPTOR_UPSTREAM: bastion-interceptor:4001
+  AGGREGATOR_UPSTREAM: bastion-aggregator:4002

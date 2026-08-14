@@ -1,7 +1,7 @@
 # BASTION — Progress Log
 
-## Status: Phase 8 complete
-Phase: 8 (reference demo agent + prompt-injection scenario) → next up: Phase 9 (production polish)
+## Status: Phase 9 complete
+Phase: 9 (production polish) → next up: final documentation set (README, API docs, SETUP.md)
 
 ## Log
 - [2026-08-14] Project specced out (PRD, ARCHITECTURE, DATA_MODEL, AUTH, API_SPEC, BUILD_PLAN written). No code yet.
@@ -368,14 +368,77 @@ Phase: 8 (reference demo agent + prompt-injection scenario) → next up: Phase 9
     the dev DB, never clean up) — worth a proper test-DB-isolation pass before Phase 9's load testing,
     where DB bloat would skew latency numbers.
 
+- [2026-08-14] Phase 9 complete:
+  - **Spec violation found and resolved, not silently**: `docs/ARCHITECTURE.md` §2.2 and `CLAUDE.md`
+    rule #4 both require `/intercept`'s event writes to be fire-and-forget so the policy decision waits
+    on nothing but the in-memory cache — the actual code has `await`ed every write inline since Phase 1,
+    never caught until this phase's load test turned it from an abstract gap into a numbers question.
+    Asked the user directly: keep synchronous writes (durability — a security audit trail that could
+    silently lose the record of a call if the process crashes between "decided" and "logged" is a worse
+    failure mode than extra p99 latency) or make it genuinely fire-and-forget. Confirmed: keep
+    synchronous, measure and report the honest latency that results. Documented in
+    `docs/ARCHITECTURE.md` §18.
+  - Prometheus metrics: `intercept_latency_seconds` (histogram, wraps the whole `/intercept` handler)
+    and `policy_decisions_total{decision=}` (counter) on the interceptor, per BUILD_PLAN.md's explicit
+    naming; `GET /metrics` added to both interceptor and aggregator (`prometheus_client`,
+    default text exposition format). Verified live: ran the Phase 8 demo scenario and confirmed
+    `/metrics` showed exactly 3 allowed + 1 blocked, matching the scenario's real call count.
+  - Structured logging (`structlog`, JSON logs, `request_id` correlation) was already in place since
+    Phase 0 — nothing new needed here, just confirmed still true.
+  - Dockerfiles for `interceptor/`, `aggregator/`, `frontend/` (multi-stage: `uv sync` for the two
+    Python services since they're workspace members and need the whole workspace source tree present
+    to resolve `uv.lock`, even though only one package's dependencies actually get installed per image;
+    Node build → nginx static serve + reverse proxy for the frontend, mirroring `vite.config.ts`'s dev
+    proxy rules exactly via `nginx.conf`). `infra/docker/docker-compose.yml` extended from
+    Postgres+Redis-only into the full local stack (adds `interceptor`, `aggregator`, `frontend`, plus
+    one-shot `migrate`/`generate-keys` init services) — **built and ran for real**, not just written:
+    logged in through the containerized frontend, ran the Phase 8 demo scenario against the
+    containerized interceptor, confirmed the blocked call end to end through every containerized
+    service.
+  - **Real bug found while standing up the full stack, fixed**: `demo-agent/demo_agent/seed.py`, run
+    natively on the host, publishes a Redis hot-reload signal after seeding a policy — the
+    *containerized* interceptor never received it. Root cause: a native, non-containerized Windows
+    Redis (`redis-server.exe`) was already bound to port 6379, silently absorbing every native-host
+    `redis://localhost:6379` connection (this session's own Redis usage included, though invisibly,
+    since publisher and subscriber being on the same wrong server still made pub/sub work
+    self-consistently until a *container* needed to receive a message from a *native* process). Fixed
+    the same way §7 already fixed the equivalent Postgres collision: moved Redis's host-published port
+    to 6389, updated every native-host default (`config.py` in both services, `demo-agent/seed.py`,
+    `.env`/`.env.example`, README). Full writeup in `docs/ARCHITECTURE.md` §19 — this also means every
+    native pytest run and native dev-mode service this whole session most likely used the wrong Redis
+    the entire time, invisibly, until this phase.
+  - K8s manifests (`infra/k8s/`): namespace, ConfigMap, Secret template (never real values), Deployments
+    + Services for all three services, one HPA for the interceptor. **Actually deployed and verified**,
+    not just written: installed `kind` (not present in this environment), created a real cluster, loaded
+    the three images, applied every manifest, hit an `ImagePullBackOff` from `:latest`'s default
+    `imagePullPolicy: Always` ignoring the locally-loaded image (fixed: `imagePullPolicy: IfNotPresent`
+    on all three), then got every pod to `1/1 Running`, port-forwarded, and ran the Phase 8 demo
+    scenario against the interceptor running inside the kind cluster — blocked correctly. Cluster torn
+    down after verification. Scaling reasoning documented per-manifest: interceptor is stateless
+    (rebuildable `PolicyCache`, hot-reloaded via Redis pub/sub) so scaling is just replica count;
+    aggregator's per-replica Postgres `LISTEN` means every replica independently receives every
+    `NOTIFY` and only needs to serve its own locally-connected WebSocket clients, so no shared fan-out
+    layer is needed between aggregator replicas either.
+  - **Load test, real numbers** (`infra/load-test/`, k6 via Docker — no local install needed): 50 req/s
+    constant arrival rate, 30s, against a single unscaled native interceptor process. Three clean runs:
+    p99 45.4ms / 46.9ms / 53.1ms (avg ~20-22ms, p95 ~37-39ms) — two of three clear
+    `docs/ARCHITECTURE.md` §6's <50ms p99 target, the third misses by ~3ms, consistent with §18's
+    documented synchronous-write tradeoff rather than a surprise. Two earlier exploratory runs under
+    machine contention (a concurrent image pull; a dozen unrelated Docker containers already running on
+    this dev machine) hit p99 as high as 562ms — reported transparently in `infra/load-test/README.md`
+    as a statement about the measurement environment, not folded into the headline numbers, which come
+    from three consecutive otherwise-idle-machine runs instead.
+  - Full 45-test workspace suite passes, `ruff`/`mypy --strict` clean, frontend `typecheck`/`lint`
+    reconfirmed clean too (no frontend code changed this phase, checked anyway).
+
 ## Next up
-- Phase 9: production polish (load testing with real latency numbers, structured logging/metrics,
-  Dockerfiles, K8s manifests). Worth resetting/isolating the dev Postgres first (see the flaky-test note
-  above) so load-test latency numbers aren't measured against a DB with thousands of accumulated rows
-  from every prior phase's test runs.
-- Final documentation set: README.md (with real load-test numbers), generated API docs (flagging
+- Final documentation set: README.md (with the real load-test numbers from `infra/load-test/README.md`
+  front and center, an architecture diagram, the "why now" story), generated API docs (flagging
   API_SPEC.md drift — including the frontend `types.ts` hand-written-mirror gap from Phase 7), SETUP.md,
   CONTRIBUTING.md if relevant, docs/decisions.md.
+- Worth resetting/isolating the dev Postgres before anything latency-sensitive in the future (still
+  true, carried over from Phase 8's note) — thousands of accumulated `test-org-*` rows from every
+  phase's test runs share the same dev DB.
 
 ## Known deviations from BUILD_PLAN.md
 - None in phase *order*. Implementation-level deviations from the original spec docs, all flagged in
@@ -389,7 +452,11 @@ Phase: 8 (reference demo agent + prompt-injection scenario) → next up: Phase 9
   (Phase 6, §15), (8) no `frontend-design` skill available, proceeded with manual design judgment
   (Phase 7, §16), (9) frontend wire types hand-written instead of OpenAPI-generated (Phase 7, §16),
   (10) demo agent's tool-selection is a deterministic scripted stand-in, not a real LLM call — no API
-  key available, and reliability-tested (20x) in a way a live LLM call would undermine (Phase 8, §17).
+  key available, and reliability-tested (20x) in a way a live LLM call would undermine (Phase 8, §17),
+  (11) `/intercept` event writes stay synchronous rather than fire-and-forget, a deliberate durability-
+  over-latency call flagged and confirmed with the user (Phase 9, §18), (12) Redis's host-published port
+  moved from the default 6379 to 6389 after discovering a real collision with a native Windows Redis on
+  this dev machine, missed by Phase 0's original port-collision check (Phase 9, §19).
 
 ## Open questions / decisions needed
 - None currently blocking. Things to revisit later:

@@ -1,5 +1,16 @@
 name: bastion
 
+# Full local stack (BUILD_PLAN.md Phase 9) — postgres/redis plus every
+# BASTION service, all built from the repo root so the interceptor/
+# aggregator Dockerfiles can see the whole uv workspace. Run from the repo
+# root: `docker compose -f infra/docker/docker-compose.yml up --build`.
+#
+# For pure backend/frontend dev work against Docker Compose Postgres+Redis
+# only (the original, smaller use of this file — services run natively via
+# uv run/npm run dev, not containerized), `docker compose -f
+# infra/docker/docker-compose.yml up postgres redis` still works exactly as
+# before; the app services are additive, not a replacement for that flow.
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -25,7 +36,11 @@ services:
     container_name: bastion-redis
     restart: unless-stopped
     ports:
-      - '6379:6379'
+      # Host 6379 turned out to collide with a locally-installed native
+      # Windows Redis on this machine — same class of issue as Postgres's
+      # host-port choice above, just not caught until Phase 9 (see
+      # docs/ARCHITECTURE.md §7/§19). Map to 6389 instead.
+      - '6389:6379'
     volumes:
       - redisdata:/data
     healthcheck:
@@ -34,6 +49,106 @@ services:
       timeout: 5s
       retries: 10
 
+  generate-keys:
+    build:
+      context: ../..
+      dockerfile: interceptor/Dockerfile
+    container_name: bastion-generate-keys
+    command: ['python', 'infra/keys/generate_dev_keys.py']
+    volumes:
+      - jwtkeys:/app/infra/keys
+    restart: 'no'
+
+  migrate:
+    build:
+      context: ../..
+      dockerfile: interceptor/Dockerfile
+    container_name: bastion-migrate
+    command: ['python', 'infra/db/migrate.py']
+    environment:
+      DATABASE_URL: postgresql://bastion:bastion@postgres:5432/bastion
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: 'no'
+
+  interceptor:
+    build:
+      context: ../..
+      dockerfile: interceptor/Dockerfile
+    container_name: bastion-interceptor
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://bastion:bastion@postgres:5432/bastion
+      REDIS_URL: redis://redis:6379
+      JWT_PRIVATE_KEY_PATH: /app/infra/keys/jwt_private.pem
+      JWT_PUBLIC_KEY_PATH: /app/infra/keys/jwt_public.pem
+    ports:
+      - '4001:4001'
+    volumes:
+      - jwtkeys:/app/infra/keys:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      generate-keys:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ['CMD', 'python', '-c', "import urllib.request; urllib.request.urlopen('http://localhost:4001/healthz')"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  aggregator:
+    build:
+      context: ../..
+      dockerfile: aggregator/Dockerfile
+    container_name: bastion-aggregator
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://bastion:bastion@postgres:5432/bastion
+      REDIS_URL: redis://redis:6379
+      JWT_PUBLIC_KEY_PATH: /app/infra/keys/jwt_public.pem
+    ports:
+      - '4002:4002'
+    volumes:
+      - jwtkeys:/app/infra/keys:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      generate-keys:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ['CMD', 'python', '-c', "import urllib.request; urllib.request.urlopen('http://localhost:4002/healthz')"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  frontend:
+    build:
+      context: ../..
+      dockerfile: frontend/Dockerfile
+    container_name: bastion-frontend
+    restart: unless-stopped
+    environment:
+      INTERCEPTOR_UPSTREAM: interceptor:4001
+      AGGREGATOR_UPSTREAM: aggregator:4002
+    ports:
+      - '8080:8080'
+    depends_on:
+      interceptor:
+        condition: service_healthy
+      aggregator:
+        condition: service_healthy
+
 volumes:
   pgdata:
   redisdata:
+  jwtkeys:

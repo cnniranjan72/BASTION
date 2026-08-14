@@ -1,0 +1,110 @@
+# Interceptor: stateless (ARCHITECTURE.md §2.2 — "your load-balancing/
+# scaling story"), so horizontal scaling is just more replicas behind the
+# Service, no session affinity or leader election needed. The one piece of
+# in-process state (PolicyCache) is intentionally a rebuildable cache, not
+# a source of truth — a new pod bootstraps it from Postgres on startup
+# (main.py's lifespan) and stays current via the Redis pub/sub hot-reload
+# listener, so scaling up mid-traffic never serves a stale decision.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bastion-interceptor
+  namespace: bastion
+  labels:
+    app: bastion-interceptor
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: bastion-interceptor
+  template:
+    metadata:
+      labels:
+        app: bastion-interceptor
+    spec:
+      containers:
+        - name: interceptor
+          image: bastion-interceptor:latest
+          # IfNotPresent, not the :latest-tag default of Always — a `kind
+          # load docker-image`'d image has no registry to pull from; a real
+          # deploy would use an immutable tag (e.g. a commit SHA) instead of
+          # :latest, which sidesteps this entirely.
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 4001
+          envFrom:
+            - configMapRef:
+                name: bastion-config
+            - secretRef:
+                name: bastion-db-redis
+          volumeMounts:
+            - name: jwt-keys
+              mountPath: /etc/bastion/keys
+              readOnly: true
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 4001
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 4001
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            # /intercept is I/O-bound (one Postgres round trip, in-memory
+            # policy lookup) rather than CPU-bound — these are deliberately
+            # modest requests/limits, not a guess at production load.
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+      volumes:
+        - name: jwt-keys
+          secret:
+            secretName: bastion-jwt-keys
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: bastion-interceptor
+  namespace: bastion
+spec:
+  selector:
+    app: bastion-interceptor
+  ports:
+    - port: 4001
+      targetPort: 4001
+---
+# CPU-based autoscaling is the simple, standard first cut — but /intercept
+# is I/O-bound, so CPU is a weak proxy for the metric that actually matters
+# (intercept_latency_seconds p99, exposed at /metrics — see
+# docs/ARCHITECTURE.md §18 for why that latency includes a synchronous
+# Postgres write and is the honest number, not an optimistic one). A real
+# production setup would run the Prometheus Adapter and scale on that
+# histogram's p99 directly; this is the "how you'd do it for real"
+# interview answer to have ready, not implemented here since it needs a
+# running Prometheus + adapter, out of scope for a `kind`/`minikube` demo.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: bastion-interceptor
+  namespace: bastion
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: bastion-interceptor
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70

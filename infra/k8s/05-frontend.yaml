@@ -1,0 +1,59 @@
+# The frontend is a static nginx image (frontend/Dockerfile) that also
+# reverse-proxies /api/* and /ws/live/* to the backend Services by their
+# in-cluster DNS names — no build-time coupling to where those Services
+# live, so this Deployment scales independently and trivially (it's just
+# static files + a proxy config, genuinely stateless).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bastion-frontend
+  namespace: bastion
+  labels:
+    app: bastion-frontend
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: bastion-frontend
+  template:
+    metadata:
+      labels:
+        app: bastion-frontend
+    spec:
+      containers:
+        - name: frontend
+          image: bastion-frontend:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: bastion-config
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 8080
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 50m
+              memory: 32Mi
+            limits:
+              cpu: 200m
+              memory: 64Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: bastion-frontend
+  namespace: bastion
+spec:
+  selector:
+    app: bastion-frontend
+  ports:
+    - port: 8080
+      targetPort: 8080
+  # ClusterIP by default — see infra/k8s/README.md for `kubectl
+  # port-forward` (guaranteed to work on kind/minikube with no add-ons) vs.
+  # a real Ingress controller (needs one installed in the cluster first).

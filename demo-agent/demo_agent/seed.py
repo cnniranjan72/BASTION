@@ -24,7 +24,7 @@ import asyncpg
 import redis.asyncio as redis
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://bastion:bastion@localhost:5442/bastion")
-REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379")
+REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6389")
 
 # ARCHITECTURE.md §2.3 / redis_bus.py's own hot-reload channel — publishing
 # here after the direct SQL insert is what makes an *already-running*
