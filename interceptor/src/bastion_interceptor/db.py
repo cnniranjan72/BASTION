@@ -802,13 +802,15 @@ class Database:
         label: str,
         key_ciphertext: bytes,
         key_nonce: bytes,
+        key_version: int,
         key_last4: str,
     ) -> asyncpg.Record:
         record = await self.pool.fetchrow(
             """
             INSERT INTO llm_credentials
-                (org_id, user_id, provider, label, key_ciphertext, key_nonce, key_last4)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
+                (org_id, user_id, provider, label,
+                 key_ciphertext, key_nonce, key_version, key_last4)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
             RETURNING id, provider, label, key_last4, created_at, last_used_at, revoked_at
             """,
             org_id,
@@ -817,6 +819,7 @@ class Database:
             label,
             key_ciphertext,
             key_nonce,
+            key_version,
             key_last4,
         )
         assert record is not None
@@ -844,7 +847,7 @@ class Database:
             "asyncpg.Record | None",
             await self.pool.fetchrow(
                 """
-                SELECT id, provider, key_ciphertext, key_nonce
+                SELECT id, provider, key_ciphertext, key_nonce, key_version
                 FROM llm_credentials
                 WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL
                 """,

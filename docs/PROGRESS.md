@@ -1645,15 +1645,91 @@ confirmed still on Postgres LISTEN/NOTIFY per v1 design) — no mismatch found.
   `create_policy`'s existing convention on the same pool — caught before
   merge, not shipped.
 
-  **Scope, stated explicitly**: master-key rotation for `BYOK_MASTER_KEY`
-  is not implemented (documented as a known gap in ADR-022's Failure modes
-  — rotating it today would make every stored credential undecryptable).
-  No per-credential spend/quota tracking beyond relaying the provider's own
-  429 — BASTION doesn't know a user's actual plan limits. "Solidly usable
-  by real users" beyond this feature (broader usability hardening) was not
-  separately scoped or attempted this session — the request's other parts
-  (BYOK, Ollama, limit handling, documentation) were interpreted as the
-  concrete, buildable expression of that goal.
+  **Scope, stated explicitly (at the time)**: master-key rotation and a
+  frontend test suite were both flagged as known gaps here — both closed
+  in the very next session, see the entry below. No per-credential spend/
+  quota tracking beyond relaying the provider's own 429 — BASTION doesn't
+  know a user's actual plan limits — remains a real, un-closed gap.
+  "Solidly usable by real users" beyond this feature (broader usability
+  hardening) was not separately scoped or attempted — the request's other
+  parts (BYOK, Ollama, limit handling, documentation) were interpreted as
+  the concrete, buildable expression of that goal.
+
+- **Post-U17: frontend test suite, `BYOK_MASTER_KEY` rotation, and the
+  real production latency number** — closing the three gaps the U17 entry
+  above flagged, in response to direct user follow-up ("add a frontend
+  test suite, fix those issues").
+
+  **Frontend test suite (Vitest + React Testing Library)**: 66 tests
+  across 9 files — none of them padding. Deliberately targeted at the
+  exact class of bug this project has already found live in the browser
+  twice (§16/§17 above): `foldEventsToGraph` (the hand-ported twin of
+  `graph.py`'s own fold — the drift risk that file's own comment already
+  names), `store/graph.ts`'s live-delta application (including a test
+  named directly after the dropped-`reason` bug §17 documents), the
+  replay playhead state machine, the auth store's JWT-decode-and-persist
+  logic (including a corrupted-localStorage recovery path, tested via
+  `vi.resetModules()` + dynamic import since it's a module-init-time
+  singleton), and the API client's 401→refresh→retry flow — including a
+  real test for *concurrent* 401s sharing exactly one `/auth/refresh`
+  call, the specific correctness property `client.ts`'s own comment
+  already named as important (a second one-time-use refresh token getting
+  consumed by a race would trigger reuse-detection and revoke the whole
+  session family).
+
+  **Real bug found writing that suite, not just coverage added**:
+  `api/client.ts`'s error handler read `body?.error.code` — the `?.` only
+  guarded `body` itself being null, not `.error` being absent, so any
+  well-formed JSON error body that didn't happen to match BASTION's own
+  `{error: {...}}` envelope shape threw an uncaught `TypeError` instead of
+  the intended clean `ApiError` fallback. The try/catch above it only ever
+  guarded JSON *parse* failures. Fixed to `body?.error?.code` /
+  `body?.error?.message`; a regression test for exactly this case is in
+  `api/client.test.ts`.
+
+  **`BYOK_MASTER_KEY` rotation**: `llm_credentials.key_version` (migration
+  `0015`) plus a versioned config (`BYOK_MASTER_KEYS` JSON map +
+  `BYOK_MASTER_KEY_VERSION`) alongside the original single-key
+  `BYOK_MASTER_KEY` (kept working unchanged, implicitly version 1) —
+  see `shared/src/bastion_shared/crypto.py`'s module docstring and the
+  updated ADR-022. `infra/scripts/rotate_byok_master_key.py` re-encrypts
+  every row still on an old version forward to the current one.
+  **Verified against real Postgres, not just unit-tested**: created a real
+  `llm_credentials` row under a version-1 key, rotated it to version 2,
+  and confirmed it decrypted correctly with *only* the version-2 key
+  present (the version-1 key removed from the environment entirely) —
+  the actual rotation guarantee, proven, not assumed from the unit tests
+  alone.
+
+  **The production `/intercept` latency number, finally measured against
+  the real deployment, not the dev machine again** (the dev machine was
+  re-confirmed still noisy immediately before this — 2.4GB/16GB RAM free,
+  an unrelated project's container pinned at 107% CPU): p50 2.45s, p95
+  8.05s, p99 8.73s at a light 15 RPS against the live Render deployment —
+  and a **sequential, zero-concurrency** single `/intercept` call still
+  took a consistent ~1.4s (5 runs, 1.39–1.42s, not noise), ruling out
+  queuing as the explanation for the floor. **Root cause found and
+  confirmed, not guessed**: Render (interceptor/aggregator compute) is in
+  Oregon; Neon Postgres is in Ohio; Redis Cloud and Redpanda Kafka are
+  both in Mumbai — three regions/continents, provisioned opportunistically
+  on free tiers across separate earlier sessions, never as a co-located
+  unit. `/intercept`'s synchronous hot path (§18) pays full Oregon↔Ohio
+  Postgres round-trip latency *and* full Oregon↔Mumbai Redis round-trip
+  latency on every single call. An infrastructure/provisioning finding,
+  not a code bug — the concrete fix (co-locate all three in Oregon, which
+  Neon supports) is real and actionable but deliberately **not done in
+  this pass**: migrating a live managed Postgres/Redis/Kafka instance is
+  costly and hard to reverse, not a unilateral action off the back of one
+  load test. Full numbers and the region table are in README.md's "The
+  production number, finally measured" section.
+
+  **Test-data note**: the k6 script creates a real org via `POST
+  /auth/signup` to measure the real code path (not a mock) — its events
+  couldn't be cleaned up afterward, deliberately: `events` has a
+  database-level trigger rejecting `DELETE` outright, the append-only
+  invariant enforced at the DB layer. Two harmless synthetic test orgs
+  now permanently exist in production, isolated by `org_id`/RLS and
+  invisible to any real user — correct behavior, not a cleanup failure.
 
 ### ADR checklist (mirrors `ADR_INDEX.md`)
 - [x] ADR-001: PostgreSQL as source of truth — `docs/adr/ADR-001-...md`.

@@ -175,6 +175,67 @@ tier likely has far fewer, so this needs its own environment-specific measuremen
 transfer) and making the circuit-breaker/limits Redis calls concurrent rather than sequential are both
 still real, un-attempted follow-ups this pass didn't reach.
 
+#### The production number, finally measured against the real deployment (U17 follow-up)
+
+The line above ("real validation needs the actual deployed environment... flagged as the next real
+step, not done here") got done. Not against the dev machine again — it was re-confirmed **still
+noisy** immediately before this run (2.4GB/16GB RAM free, an unrelated project's container pinned at
+107% CPU) — so this measured the real Render production deployment instead, which sidesteps that
+confound entirely and is arguably the more honest number for a portfolio piece anyway: not "latency on
+my laptop," latency on the thing a reviewer would actually hit.
+
+```
+docker run --rm -i -e BASE_URL=https://bastion-interceptor.onrender.com \
+  -e TARGET_RPS=15 -e DURATION=20s grafana/k6 run - < infra/k6/intercept_load_test.js
+```
+
+| | value |
+|---|---|
+| p95 | 8.05s |
+| p99 | 8.73s |
+| median | 2.45s |
+| min | 808ms |
+| dropped iterations | 148/300 (system fell behind the requested 15 RPS well before any request failed outright — 0% HTTP errors) |
+
+Worse than every dev-machine number above, including the noisy ones — and a single **sequential**,
+**zero-concurrency** `/intercept` call (no k6, no load, one request at a time, 5 runs) still took a
+consistent **~1.4s each** (1.39–1.42s, tight variance — not noise). That rules out queuing/contention
+as the explanation for the floor: something costs ~1.4s on every single call regardless of load.
+
+**Root cause, found and confirmed, not guessed**: the three managed backing services this deployment
+uses (all provisioned opportunistically on free tiers across earlier sessions, not planned as a unit)
+sit in three different cloud regions/continents from the Render compute itself:
+
+| service | region |
+|---|---|
+| Render (interceptor + aggregator) | Oregon, US (`us-west`) |
+| Neon Postgres | Ohio, US (`us-east-2`) |
+| Redis Cloud | Mumbai, India (`ap-south-1`) |
+| Redpanda Kafka | Mumbai, India (`ap-south-1`) |
+
+`/intercept`'s hot path is synchronous by design (§18 above) — it `await`s a Postgres `insert_event`
+write and, for an allowed call, a Redis circuit-breaker check, both inline before responding. Every
+single call pays full Oregon↔Ohio round-trip latency for Postgres *and* full Oregon↔Mumbai round-trip
+latency for Redis, on top of TLS handshake overhead — that's the ~1.4s floor, and it compounds directly
+into the much worse concurrent numbers above once multiple in-flight requests are also competing for
+the same small free-tier connection limits on each managed service.
+
+**This is an infrastructure/provisioning finding, not a code bug** — the same class of decision already
+disclosed elsewhere in this README (e.g. §7's port collisions), not hidden. The concrete fix (co-locate
+Neon/Redis Cloud/Redpanda in the same region as the Render service — Neon offers an Oregon region) is a
+real, actionable next step, deliberately **not done in this pass**: migrating a managed Postgres/Redis/
+Kafka instance is a costly, hard-to-reverse action against live infrastructure, not something to do
+unilaterally off the back of a load test.
+
+**Test-data note**: this test's own setup (`infra/k6/intercept_load_test.js`) creates a real org via
+`POST /auth/signup` to measure the real code path, not a mock. Its events couldn't be cleaned up
+afterward — deliberately, by design: `events` has a database-level trigger that rejects `DELETE`
+entirely (the event-sourcing append-only invariant, enforced at the DB layer, not just by convention).
+Two harmless synthetic test orgs (`k6-load-*`, `single-shot-*`) now permanently exist in the production
+database as a result, isolated by `org_id`/RLS and invisible to any real user — the same guarantee that
+protects every real org's data also means this test's own leftover data can't be scrubbed away, which
+is the correct tradeoff, not treated as a cleanup failure.
+
 ### Deploying this for real: the gap between "pushed to GitHub" and "actually running"
 
 U9 through U15 (partitioning, RLS, realtime-at-scale, observability, chaos testing, frontend v2) were
@@ -666,6 +727,9 @@ runs, and `aggregator/tests/conftest.py` drives the actual outbox → Kafka → 
 | `aggregator/tests/chaos` | Real-infra outage drills against the docker-compose stack only (`docker stop`/`start` on `bastion-kafka`, `bastion-redis`, …) — deliberately **not** run in CI |
 | `sdk-python/tests` | `/intercept` semantics end to end through `httpx.ASGITransport` |
 | `demo-agent/tests` | The injected transfer is blocked reliably 20/20 times; the legitimate under-threshold refund goes through |
+| `frontend` (Vitest + React Testing Library, U17) | The client-side event fold (`foldEvents.ts`, a hand-ported twin of `graph.py`'s own fold — the exact kind of file that can silently drift); live-graph delta application (`store/graph.ts`, including the specific dropped-`reason` bug class `ARCHITECTURE.md` §17 found live); Incident Replay's playhead state machine (`store/replay.ts`); the auth store's JWT-decode-and-persist logic, including a corrupted-localStorage recovery path; the API client's 401→refresh→retry flow, concurrent-401 refresh deduplication, and error-body mapping (found and fixed a real latent crash here — see below); `LoginPage` and `AccountPage`'s LLM-key/live-demo flows against a mocked API client |
+
+**Real bug found writing the frontend suite, not just coverage added**: `api/client.ts`'s error handler did `body?.error.code` — the `?.` only guarded `body` being null, so any well-formed JSON error body that didn't happen to have BASTION's own `{error: {...}}` envelope shape (e.g. an intermediary's own error page, or just `{}`) threw an uncaught `TypeError` instead of the intended clean `ApiError` fallback. Fixed to `body?.error?.code`; the test that would have caught this is in `api/client.test.ts`.
 
 Gates (all enforced in CI):
 
@@ -673,7 +737,7 @@ Gates (all enforced in CI):
 uv run ruff check . && uv run ruff format --check .
 uv run mypy shared/src interceptor/src aggregator/src sdk-python/bastion demo-agent/demo_agent
 uv run pytest shared/tests interceptor/tests aggregator/tests sdk-python/tests demo-agent/tests
-(cd frontend && npm run typecheck && npm run lint)
+(cd frontend && npm run typecheck && npm run lint && npm run test)
 ```
 
 `pytest` runs with `--import-mode=importlib` and a session-scoped asyncio loop — both required here

@@ -1301,7 +1301,7 @@ async def create_llm_credential(
     # use — BASTION must hand this back to the provider in plaintext on
     # every /demo/live-run call (docs/adr/ADR-022). The plaintext itself
     # is never stored, logged, or returned past this point.
-    ciphertext, nonce = encrypt_secret(body.api_key)
+    ciphertext, nonce, key_version = encrypt_secret(body.api_key)
     record = await db.create_llm_credential(
         org_id=user.org_id,
         user_id=user.id,
@@ -1309,6 +1309,7 @@ async def create_llm_credential(
         label=body.label,
         key_ciphertext=ciphertext,
         key_nonce=nonce,
+        key_version=key_version,
         key_last4=body.api_key[-4:] if len(body.api_key) >= 4 else body.api_key,
     )
     log.info("llm credential created", user_id=str(user.id), provider=body.provider)
@@ -1382,7 +1383,9 @@ async def run_live_demo(
                 },
             )
         api_key = decrypt_secret(
-            credential_record["key_ciphertext"], credential_record["key_nonce"]
+            credential_record["key_ciphertext"],
+            credential_record["key_nonce"],
+            credential_record["key_version"],
         )
 
     demo_agent_record = await db.get_or_create_live_demo_agent(user.org_id)

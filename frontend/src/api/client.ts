@@ -102,8 +102,8 @@ async function request<T>(base: string, path: string, init?: RequestInit): Promi
     }
     throw new ApiError(
       response.status,
-      body?.error.code ?? "UNKNOWN_ERROR",
-      body?.error.message ?? response.statusText,
+      body?.error?.code ?? "UNKNOWN_ERROR",
+      body?.error?.message ?? response.statusText,
     );
   }
   if (response.status === 204) return undefined as T;

@@ -9,7 +9,8 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "lint": "eslint .",
-    "typecheck": "tsc -b --noEmit"
+    "typecheck": "tsc -b --noEmit",
+    "test": "vitest run"
   },
   "dependencies": {
     "@react-three/drei": "^10.7.8",
@@ -23,17 +24,23 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.17.0",
+    "@testing-library/jest-dom": "^7.0.1",
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.4",
     "@types/react": "^19.2.2",
     "@types/react-dom": "^19.2.2",
     "@types/three": "^0.180.0",
     "@vitejs/plugin-react": "^6.0.5",
+    "@vitest/ui": "^4.1.10",
     "eslint": "^9.17.0",
     "eslint-config-prettier": "^9.1.0",
     "eslint-plugin-react-hooks": "^5.1.0",
     "eslint-plugin-react-refresh": "^0.4.16",
+    "jsdom": "^29.1.1",
     "prettier": "^3.4.2",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.67.0",
-    "vite": "^8.2.1"
+    "vite": "^8.2.1",
+    "vitest": "^4.1.10"
   }
 }

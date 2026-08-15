@@ -40,7 +40,7 @@ from .call_state import (
     state_for_event,
     transition,
 )
-from .crypto import MasterKeyNotConfigured, decrypt_secret, encrypt_secret
+from .crypto import MasterKeyNotConfigured, current_key_version, decrypt_secret, encrypt_secret
 from .errors import BastionError, ErrorDetail, ErrorResponse
 from .events import (
     CallAttemptedPayload,
@@ -185,6 +185,7 @@ __all__ = [
     "NodeAddedMessage",
     "NodeUpdatedMessage",
     "MasterKeyNotConfigured",
+    "current_key_version",
     "decrypt_secret",
     "encrypt_secret",
     "LLMAuthError",

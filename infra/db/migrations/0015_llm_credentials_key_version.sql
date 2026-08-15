@@ -1,0 +1,12 @@
+-- U17 follow-up: closes ADR-022's "master-key rotation is not implemented"
+-- gap. Every row now records which BYOK_MASTER_KEY(S) version it was
+-- encrypted under, so BYOK_MASTER_KEY can be rotated without making
+-- existing rows undecryptable — see shared/src/bastion_shared/crypto.py's
+-- module docstring and infra/scripts/rotate_byok_master_key.py for the
+-- actual rotation procedure.
+--
+-- Default 1: every row created before this migration was encrypted under
+-- the single (implicitly version-1) BYOK_MASTER_KEY that was the only
+-- supported configuration at the time — this backfill is exact, not a
+-- guess.
+ALTER TABLE llm_credentials ADD COLUMN key_version smallint NOT NULL DEFAULT 1;
