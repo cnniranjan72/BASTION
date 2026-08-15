@@ -47,6 +47,16 @@ class Config:
     kafka_sasl_mechanism: str
     kafka_sasl_username: str
     kafka_sasl_password: str
+    # Deployment-specific adaptation, not the original design: the
+    # standalone OutboxPublisher process (config.py's comment on
+    # kafka_bootstrap_servers above still describes the intended shape) is
+    # normally its own process -- docker-compose's outbox-publisher service
+    # still runs it that way. Render's free plan allows only web services,
+    # no background workers, so this flag runs it as a background asyncio
+    # task inside the interceptor's own process instead when set. It never
+    # touches the request-handling hot path either way (a separate asyncio
+    # task, not inline in any request handler) -- see main.py's lifespan.
+    run_outbox_publisher_embedded: bool
     # U5 (v2 upgrade), UPGRADE_ARCHITECTURE.md §6's reconciliation loop: how
     # often this instance re-checks its cached policy versions against
     # Postgres, self-healing any drift from a missed Redis pub/sub message.
@@ -94,6 +104,10 @@ def load_config() -> Config:
         kafka_sasl_mechanism=os.environ.get("KAFKA_SASL_MECHANISM", ""),
         kafka_sasl_username=os.environ.get("KAFKA_SASL_USERNAME", ""),
         kafka_sasl_password=os.environ.get("KAFKA_SASL_PASSWORD", ""),
+        run_outbox_publisher_embedded=os.environ.get(
+            "RUN_OUTBOX_PUBLISHER_EMBEDDED", "false"
+        ).lower()
+        == "true",
         policy_reconciliation_interval_seconds=float(
             os.environ.get("POLICY_RECONCILIATION_INTERVAL_SECONDS", "30")
         ),

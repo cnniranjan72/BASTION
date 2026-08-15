@@ -63,11 +63,22 @@ services:
     environment:
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
-      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      # Two listeners, not one: PLAINTEXT (advertised as localhost:9092) is
+      # what host-run processes/tests use via the published port below;
+      # INTERNAL (advertised as kafka:29092) is what other *containers* in
+      # this compose network (interceptor, aggregator, outbox-publisher)
+      # actually need. A single PLAINTEXT-only listener advertised as
+      # "localhost" is a real, previously-undiscovered gap: any container
+      # client that bootstraps successfully still gets told by the broker's
+      # own metadata response to reconnect to "localhost:9092" for the
+      # actual produce/consume connection, which resolves to itself inside
+      # that container, not this one -- the standard Kafka-in-Docker
+      # dual-listener fix.
+      KAFKA_LISTENERS: PLAINTEXT://:9092,INTERNAL://:29092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092,INTERNAL://kafka:29092
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
       KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,INTERNAL:PLAINTEXT
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       CLUSTER_ID: 'MkU3OEVBNTcwNTJENDM2Qk'
@@ -190,7 +201,18 @@ services:
     restart: unless-stopped
     environment:
       DATABASE_URL: postgresql://bastion:bastion@postgres:5432/bastion
+      # U8's RLS role (org_scoped_connection, db.py) -- without this, the
+      # container falls back to config.py's localhost default, which
+      # doesn't exist inside the container network. This was previously
+      # unset here entirely (a real gap: `docker-compose up`'s interceptor
+      # never actually started until now, matching the same class of bug
+      # this whole session found and fixed on the Render deploy).
+      APP_DATABASE_URL: postgresql://bastion_app:bastion_app@postgres:5432/bastion
       REDIS_URL: redis://redis:6379
+      # Only the endpoint differs from config.py's own defaults (access
+      # key/secret/bucket already match minio's environment above) --
+      # same localhost-inside-the-container problem as APP_DATABASE_URL.
+      OBJECT_STORAGE_ENDPOINT_URL: http://minio:9000
       JWT_PRIVATE_KEY_PATH: /app/infra/keys/jwt_private.pem
       JWT_PUBLIC_KEY_PATH: /app/infra/keys/jwt_public.pem
     ports:
@@ -201,6 +223,8 @@ services:
       postgres:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      minio:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
@@ -221,6 +245,12 @@ services:
     environment:
       DATABASE_URL: postgresql://bastion:bastion@postgres:5432/bastion
       REDIS_URL: redis://redis:6379
+      # U11's Kafka consumer (kafka_consumer.py) is started from main.py's
+      # lifespan -- previously unset here, so it fell back to config.py's
+      # localhost default and could never actually reach the kafka service.
+      # Real gap: `docker-compose up`'s aggregator never fully started
+      # either, same story as interceptor's APP_DATABASE_URL above.
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       JWT_PUBLIC_KEY_PATH: /app/infra/keys/jwt_public.pem
     ports:
       - '4002:4002'
@@ -231,6 +261,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      kafka:
+        condition: service_healthy
       migrate:
         condition: service_completed_successfully
       generate-keys:
@@ -240,6 +272,39 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+
+  outbox-publisher:
+    # U3's OutboxPublisher (interceptor/outbox_publisher.py) -- polls
+    # outbox_events and publishes to Kafka's tool-events topic. Not part of
+    # the interceptor HTTP service itself (config.py's own comment: "only
+    # the outbox publisher process actually connects to this"), so it needs
+    # its own container even though it reuses interceptor's exact image --
+    # docker-entrypoint.sh's command pass-through exists specifically for
+    # this. Previously had no docker-compose service at all (a documented
+    # gap since U13 -- see docs/PROGRESS.md); this closes it.
+    build:
+      context: ../..
+      dockerfile: interceptor/Dockerfile
+    container_name: bastion-outbox-publisher
+    restart: unless-stopped
+    command: ['python', '-m', 'bastion_interceptor.outbox_publisher']
+    environment:
+      DATABASE_URL: postgresql://bastion:bastion@postgres:5432/bastion
+      APP_DATABASE_URL: postgresql://bastion_app:bastion_app@postgres:5432/bastion
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+    # Overrides interceptor/Dockerfile's inherited HTTP HEALTHCHECK (there's
+    # no HTTP server in this process, so that check would just always fail
+    # and mark this container permanently "unhealthy" despite working fine
+    # -- verified via its actual publish logs, not this flag alone).
+    healthcheck:
+      disable: true
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
 
   frontend:
     build:

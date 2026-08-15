@@ -18,4 +18,15 @@ if [ -n "$JWT_PUBLIC_KEY_PEM" ]; then
     printf '%s' "$JWT_PUBLIC_KEY_PEM" > "${JWT_PUBLIC_KEY_PATH:-/app/infra/keys/jwt_public.pem}"
 fi
 
+
+# Same image doubles as the standalone OutboxPublisher process (Render's
+# background-worker service type overrides the container command to
+# `python -m bastion_interceptor.outbox_publisher`; docker-compose's
+# outbox-publisher service does the same) -- pass any given command
+# through unchanged rather than always forcing uvicorn, so both roles
+# share one image/Dockerfile with no duplicate build.
+if [ "$#" -gt 0 ]; then
+    exec "$@"
+fi
+
 exec uvicorn bastion_interceptor.main:app --host 0.0.0.0 --port "${INTERCEPTOR_PORT:-4001}"

@@ -34,7 +34,7 @@ import secrets
 import time
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime, timedelta
 from functools import lru_cache
 from pathlib import Path
@@ -117,6 +117,7 @@ from .metrics import (
     intercept_latency_seconds,
     policy_decisions_total,
 )
+from .outbox_publisher import OutboxPublisher
 from .policy_reconciler import PolicyReconciler
 from .redis_bus import redis_bus
 
@@ -194,9 +195,20 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     # U5 (v2 upgrade): the pub/sub listener above is the fast path; this is
     # the backstop for whatever it misses (UPGRADE_ARCHITECTURE.md §6).
     policy_reconciler.start()
+    # Deployment-specific adaptation (config.py's field docstring has the
+    # full reasoning): a background asyncio task, not anything in the
+    # request-handling path -- /intercept's own hot path still never
+    # touches Kafka directly, matching UPGRADE_ARCHITECTURE.md §4.2.
+    outbox_publisher_task: asyncio.Task[None] | None = None
+    if config.run_outbox_publisher_embedded:
+        outbox_publisher_task = asyncio.create_task(OutboxPublisher().run_forever())
     try:
         yield
     finally:
+        if outbox_publisher_task is not None:
+            outbox_publisher_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await outbox_publisher_task
         await policy_reconciler.stop()
         await redis_bus.close()
         await db.close()
