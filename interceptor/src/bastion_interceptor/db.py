@@ -45,7 +45,7 @@ class Database:
         self._pool = await asyncpg.create_pool(
             config.database_url,
             min_size=1,
-            max_size=10,
+            max_size=config.db_pool_max_size,
             init=_init_connection,
             command_timeout=config.db_query_timeout_seconds,
         )

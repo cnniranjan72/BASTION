@@ -50,9 +50,24 @@ def configure_tracing(app: FastAPI, *, service_name: str) -> None:
         # Passing `endpoint=` explicitly (vs. relying on the exporter's own
         # env-var fallback) means it's used verbatim, not auto-suffixed —
         # `/v1/traces` has to be appended here.
+        # U13 CI-fix/perf follow-up: real py-spy profiling under the U13
+        # load test's own 25 RPS found the exporter's encode+HTTP-export
+        # path (its own background thread, but still GIL-shared with the
+        # request-handling thread) at ~20% of all sampled time combined --
+        # the SDK's default max_export_batch_size (512)/schedule_delay
+        # (5000ms) forces exports often enough under load that the fixed
+        # per-call overhead (HTTP connection, protobuf framing) is paid
+        # far more often than it needs to be. Larger, less frequent
+        # batches amortize that fixed cost across more spans; this does
+        # NOT reduce the real per-span encoding cost (proportional to
+        # AsyncPGInstrumentor's per-query auto-spans, a deliberate
+        # observability choice this doesn't touch), only the per-export
+        # overhead layered on top of it.
         provider.add_span_processor(
             BatchSpanProcessor(
-                OTLPSpanExporter(endpoint=f"{config.otel_exporter_otlp_endpoint}/v1/traces")
+                OTLPSpanExporter(endpoint=f"{config.otel_exporter_otlp_endpoint}/v1/traces"),
+                max_export_batch_size=config.otel_max_export_batch_size,
+                schedule_delay_millis=config.otel_schedule_delay_millis,
             )
         )
         trace.set_tracer_provider(provider)

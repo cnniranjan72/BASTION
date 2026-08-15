@@ -1485,6 +1485,81 @@ confirmed still on Postgres LISTEN/NOTIFY per v1 design) — no mismatch found.
   reachable per-trace; a standalone index/log screen for either is real,
   separate scope, not silently faked as a working nav link.
 
+- **Post-U16: topbar horizontal overflow, real user-reported bug, fixed.**
+  User report: every screen showed a horizontal scrollbar with a blank
+  strip on the right. Root cause confirmed precisely via
+  `getBoundingClientRect`/`scrollWidth` measurements in a live browser
+  session, not guessed: U16 grew `.topbar__nav` to 6 groups/12+ links;
+  flex items default to `min-width: auto`, which refuses to let a flex
+  child shrink below its own content's intrinsic width even when
+  `flex-shrink` otherwise allows it — the classic flexbox overflow trap.
+  At a real 1536px viewport, `.topbar`'s content needed 1782px (nav alone
+  needed 1259px), forcing the whole page 246px wider than the viewport on
+  every real laptop width. Fix: `min-width: 0` on `.topbar__nav` lets it
+  actually shrink; `overflow-x: auto` turns it into its own contained
+  scroll region for the remainder, so every nav item stays reachable
+  without the page itself scrolling — plus a defensive `overflow-x:
+  hidden` on `body`. Verified precisely (`scrollWidth - innerWidth`: 246px
+  before, 0px after) on Command Center, Trace Explorer, and the Graph page
+  (worst case — also shows the live-status badge). Deep sweep for the same
+  bug class elsewhere (every element's `scrollWidth` vs `clientWidth`
+  across multiple pages): topbar was the sole offender; the two other
+  genuinely unbounded horizontal lists in the app (`.timeline`,
+  `.replay-timeline__steps`) already had `overflow-x: auto` from earlier
+  sessions.
+
+- **Post-U16: the U13 load-test isolation pass, actually performed.**
+  U13's own entry above flagged "a proper isolation pass... not performed
+  in this pass" — done now, with `py-spy` (real sampling profiler, 100Hz,
+  attached to the live interceptor process under the identical 25 RPS k6
+  load U13 used), not more guessing.
+
+  Two real, concrete contributors found and fixed, both confirmed by
+  direct before/after profiler comparison:
+  - OTel's `BatchSpanProcessor` export path (`encode_spans` + the OTLP/HTTP
+    export call, on its own background thread but still GIL-shared with
+    request handling) — ~20% of all sampled time combined in the baseline
+    profile. The SDK's defaults (`max_export_batch_size=512`,
+    `schedule_delay_millis=5000`) force exports often enough under load
+    that the fixed per-export cost gets paid far more than necessary.
+    Raised both to configurable values (`OTEL_MAX_EXPORT_BATCH_SIZE=2048`,
+    `OTEL_SCHEDULE_DELAY_MILLIS=10000`) in both `interceptor/tracing.py`
+    and `aggregator/tracing.py` (same issue, same fix, mirrored for
+    consistency). Confirmed: the export/encode frames dropped out of the
+    top 50 sampled frames entirely in the follow-up profile.
+  - asyncpg pool contention: `release()`/`reset()` at ~21% of all sampled
+    time combined, from `min_size=1, max_size=10` against 50 concurrent k6
+    VUs — most callers were queued waiting for one of only 10 connections,
+    not doing real work. Raised to a configurable `DB_POOL_MAX_SIZE`
+    (default 30, `interceptor/config.py`+`db.py`). Confirmed: dropped to
+    ~15% combined across two separate profiler runs, a real, reproducible
+    reduction — this also directly informs ADR-010's previously-deferred
+    "connection pooling wasn't ruled out" question.
+
+  **What this did not produce: a clean before/after millisecond number**,
+  reported honestly rather than smoothed over. End-to-end k6 latency on
+  the dev machine these fixes were profiled on got *worse* run over run
+  despite both fixes measurably working at the CPU-profile level —
+  investigated, not dismissed: by the third profiler run, that same
+  machine had 1.4GB of 15.7GB RAM free and a single `bastion-kafka`
+  container alone consuming 163% CPU (over 1.5 cores) after a full day of
+  continuous testing, plus an unrelated project's own containers running
+  concurrently. Real, external confound, same root cause the v1 load-test
+  README already flagged ("a shared, busy dev machine is not a clean
+  benchmarking environment") — not evidence the fixes don't work. Profiler
+  CPU-proportion comparisons are far more robust to this kind of noise
+  than wall-clock latency is; that's why they're what's reported as
+  confirmed here, and the absolute p99 is explicitly not claimed fixed.
+
+  **Scope, stated explicitly, again**: `uvicorn --workers N` (this
+  profiling machine has 12 cores; Render's free tier likely has far
+  fewer, so this needs its own environment-specific measurement) and
+  making the circuit-breaker/limits Redis calls concurrent rather than
+  sequential are both still real, un-attempted follow-ups. A clean
+  before/after latency number, on a quiet machine or the real deployed
+  environment under controlled load, is the concrete next step — not
+  done here.
+
 ### ADR checklist (mirrors `ADR_INDEX.md`)
 - [x] ADR-001: PostgreSQL as source of truth — `docs/adr/ADR-001-...md`.
 - [x] ADR-002: Kafka for event distribution (not source of truth) — `docs/adr/ADR-002-...md`.

@@ -67,6 +67,15 @@ class Config:
     # command_timeout) — a hung/runaway query can no longer hold a
     # connection (and, transitively, exhaust the pool) forever.
     db_query_timeout_seconds: float
+    # U13 CI-fix/perf follow-up, UPGRADE_ARCHITECTURE.md §15's load-test
+    # SLO: real py-spy profiling under the same 25 RPS/50-VU load the
+    # original regression was measured at found ~21% of all sampled time
+    # inside asyncpg's pool release()/reset() path -- the old max_size=10
+    # meant most of 50 concurrent callers were queued waiting for one of
+    # only 10 connections, not doing real work. Configurable (not just
+    # raised in-line) so a deployment can tune it to its own real
+    # concurrency without a code change.
+    db_pool_max_size: int
     # U9, §12: payloads at or above this size (bytes, serialized JSON) get
     # offloaded to object storage instead of stored inline in Postgres.
     object_storage_payload_threshold_bytes: int
@@ -77,6 +86,11 @@ class Config:
     # U12 (v2 upgrade): OTLP/HTTP endpoint traces are exported to — Jaeger's
     # all-in-one container accepts this directly, no separate Collector.
     otel_exporter_otlp_endpoint: str
+    # U13 CI-fix/perf follow-up: see tracing.py's comment on the span
+    # processor for why these are larger/less-frequent than the OTel SDK's
+    # own defaults (512 / 5000ms).
+    otel_max_export_batch_size: int
+    otel_schedule_delay_millis: int
 
 
 def load_config() -> Config:
@@ -112,6 +126,7 @@ def load_config() -> Config:
             os.environ.get("POLICY_RECONCILIATION_INTERVAL_SECONDS", "30")
         ),
         db_query_timeout_seconds=float(os.environ.get("DB_QUERY_TIMEOUT_SECONDS", "30")),
+        db_pool_max_size=int(os.environ.get("DB_POOL_MAX_SIZE", "30")),
         object_storage_payload_threshold_bytes=int(
             os.environ.get("OBJECT_STORAGE_PAYLOAD_THRESHOLD_BYTES", str(8 * 1024))
         ),
@@ -124,6 +139,8 @@ def load_config() -> Config:
         otel_exporter_otlp_endpoint=os.environ.get(
             "OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4319"
         ),
+        otel_max_export_batch_size=int(os.environ.get("OTEL_MAX_EXPORT_BATCH_SIZE", "2048")),
+        otel_schedule_delay_millis=int(os.environ.get("OTEL_SCHEDULE_DELAY_MILLIS", "10000")),
     )
 
 

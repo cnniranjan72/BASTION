@@ -134,6 +134,44 @@ Reproduce: `docker run --rm -e BASE_URL=http://host.docker.internal:4011 -e TARG
 (with the interceptor running standalone on port 4011 and its full dependency stack — Postgres,
 Redis, Kafka, MinIO, Jaeger — up via `docker compose -f infra/docker/docker-compose.yml up -d`).
 
+#### The follow-up isolation pass, actually performed
+
+The "not performed in this pass" isolation work above got done in a later session, with a real
+profiler (`py-spy`, sampling the live interceptor process at 100Hz while under the same 25 RPS k6 load),
+not more guessing. Two real, concrete contributors, found and fixed:
+
+- **OTel's `BatchSpanProcessor` export path — ~20% of all sampled time combined** (`encode_spans` +
+  the OTLP/HTTP export call, on its own background thread but still GIL-shared with the
+  request-handling thread). The SDK's defaults (`max_export_batch_size=512`, `schedule_delay_millis=
+  5000`) force an export often enough under load that the fixed per-call cost (protobuf framing, HTTP
+  connection) gets paid far more often than necessary. Raised both (`OTEL_MAX_EXPORT_BATCH_SIZE=2048`,
+  `OTEL_SCHEDULE_DELAY_MILLIS=10000`, both configurable) — confirmed by a second profiler run with
+  identical load: the export/encode frames **dropped out of the top 50 sampled frames entirely**.
+- **asyncpg pool contention — `release()`/`reset()` at ~21% of all sampled time combined**, from
+  `min_size=1, max_size=10` against 50 concurrent k6 VUs — most callers were queued waiting for one of
+  only 10 connections, not doing real work. Raised to a configurable `DB_POOL_MAX_SIZE` (default 30) —
+  confirmed by profiler: `release`/`reset` dropped to ~15% combined, a real, reproducible reduction
+  across two separate profiler runs.
+
+**What this did *not* produce: a clean before/after millisecond number**, and that's reported honestly
+rather than papered over. End-to-end k6 latency on the dev machine these fixes were profiled on got
+*worse* run over run despite both fixes measurably working at the CPU-profile level — investigated
+rather than dismissed: at the time of the third run, that same machine had **1.4GB of 15.7GB RAM free**
+and a single `bastion-kafka` container alone consuming **163% CPU** (over 1.5 cores) after a full day of
+continuous testing, plus an unrelated project's own containers running concurrently. That's a real,
+external confound with the same root cause the original v1 load-test README already flagged ("a shared,
+busy dev machine is not a clean benchmarking environment") — not evidence the fixes don't work. The
+profiler comparisons above are far more robust to this kind of noise than wall-clock latency is (they
+measure *proportion of active CPU time*, not time spent waiting behind unrelated processes for a
+scheduler slice), which is why they're the numbers reported here as confirmed, and the absolute p99 is
+not claimed to be fixed. **Real validation of the end-to-end number needs a clean machine or the actual
+deployed environment under controlled load — flagged as the next real step, not done here.**
+
+**Scope, stated explicitly, again**: `uvicorn --workers N` (this machine has 12 cores; Render's free
+tier likely has far fewer, so this needs its own environment-specific measurement, not assumed to
+transfer) and making the circuit-breaker/limits Redis calls concurrent rather than sequential are both
+still real, un-attempted follow-ups this pass didn't reach.
+
 ### Deploying this for real: the gap between "pushed to GitHub" and "actually running"
 
 U9 through U15 (partitioning, RLS, realtime-at-scale, observability, chaos testing, frontend v2) were

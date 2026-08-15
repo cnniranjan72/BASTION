@@ -39,6 +39,10 @@ class Config:
     # U12 (v2 upgrade) — same reasoning as interceptor/config.py's field of
     # the same name.
     otel_exporter_otlp_endpoint: str
+    # U13 CI-fix/perf follow-up — same reasoning as interceptor/config.py's
+    # fields of the same name.
+    otel_max_export_batch_size: int
+    otel_schedule_delay_millis: int
 
 
 def load_config() -> Config:
@@ -62,6 +66,8 @@ def load_config() -> Config:
         otel_exporter_otlp_endpoint=os.environ.get(
             "OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4319"
         ),
+        otel_max_export_batch_size=int(os.environ.get("OTEL_MAX_EXPORT_BATCH_SIZE", "2048")),
+        otel_schedule_delay_millis=int(os.environ.get("OTEL_SCHEDULE_DELAY_MILLIS", "10000")),
     )
 
 

@@ -39,9 +39,14 @@ def configure_tracing(app: FastAPI, *, service_name: str) -> None:
     global _configured
     if not _configured:
         provider = TracerProvider(resource=Resource.create({SERVICE_NAME: service_name}))
+        # U13 CI-fix/perf follow-up: mirrors interceptor/tracing.py's same
+        # change -- see that module's comment for the real profiling
+        # evidence behind it.
         provider.add_span_processor(
             BatchSpanProcessor(
-                OTLPSpanExporter(endpoint=f"{config.otel_exporter_otlp_endpoint}/v1/traces")
+                OTLPSpanExporter(endpoint=f"{config.otel_exporter_otlp_endpoint}/v1/traces"),
+                max_export_batch_size=config.otel_max_export_batch_size,
+                schedule_delay_millis=config.otel_schedule_delay_millis,
             )
         )
         trace.set_tracer_provider(provider)
