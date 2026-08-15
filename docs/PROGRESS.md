@@ -1127,7 +1127,60 @@ confirmed still on Postgres LISTEN/NOTIFY per v1 design) — no mismatch found.
   full chain) is deferred to U15, since Frontend v2 doesn't exist yet to instrument. Load-test-scale
   tracing overhead (does OTel's own cost matter at 5K RPS) is U13's question to answer, not this
   phase's.
-- U13–U16: not started.
+- **U13 — SLOs, load testing, alerting: done, and it found a real regression.** §15's SLO table
+  (availability 99.9%, `/intercept` p99 < 50ms, policy decision p99 < 10ms, event durability 99.99%,
+  WS propagation p99 < 500ms) turned into an actual k6 load-testing harness
+  (`infra/k6/intercept_load_test.js`, run via the `grafana/k6` Docker image — k6 isn't natively
+  installed on this machine) plus real Prometheus alert rules (`infra/prometheus/alerts.yml`,
+  4 rules: `InterceptLatencyP99High`, `InterceptorAvailabilityLow`, `OutboxBacklogGrowing`,
+  `DbPoolNearSaturation` — WS propagation and event-durability rows have no corresponding Prometheus
+  metric yet, so their alert rows are omitted rather than faked). The script uses
+  `constant-arrival-rate` so achieved rate can be compared against requested rate, and `setup()`
+  creates a real org/agent through the real HTTP API (no direct DB seeding) with no policy attached,
+  isolating `/intercept`'s own hot-path cost from policy evaluation's separate SLO row. **The finding**:
+  the system does not meet its own `/intercept` p99 < 50ms SLO at any sustained concurrent load level
+  tested (full results table in `README.md`'s new "v2 load test" section) — baseline at ~1 RPS was
+  reasonable (p95 127ms), 10 RPS still held (p95 109ms), but 25 RPS showed real run-to-run variance
+  (758ms vs. 132ms across two runs) and every level at or above 50 RPS missed the SLO. Direct evidence
+  (PowerShell `Get-Process` sampled concurrently with a live k6 run) showed ~75% single-core CPU
+  utilization at just 25 RPS, pointing to single-process/single-worker uvicorn plus the cumulative
+  synchronous per-request work added across U1–U12 (OTel spans, circuit-breaker/limits Redis
+  round-trips, object-storage size checks) as the likely dominant contributor — stated as evidence,
+  not a fully isolated root cause; an isolation pass (e.g. disabling OTel export and re-measuring) was
+  not performed. A separate finding: `bastion_outbox_unpublished_total` grew to 17,267 during the
+  sustained runs, correctly attributed to no standalone `OutboxPublisher` process running in this test
+  setup (a test-setup gap, not a production bug — the interceptor's own request path was still the
+  thing being measured). **Scope, stated explicitly**: no performance optimization was attempted in
+  response to these findings — per the user's standing "document the failure, real artifacts" rule,
+  the finding itself is this phase's deliverable, not a fix. This newly informs (but doesn't resolve)
+  ADR-012's deferred read-replica decision and ADR-010's deferred PgBouncer/pooling decision — neither
+  ADR was reopened, since neither one's trigger condition is specifically what U13 found (the
+  bottleneck evidence points at CPU-bound single-process overhead, not connection-pool contention or
+  read-vs-write DB load). No formal U13 ADR was written: unlike U8/U9's RLS/partitioning decisions,
+  nothing here was a design choice with a road not taken to record — it's a measurement result, fully
+  captured in README.md's write-up, matching the precedent that not every phase produces a required
+  ADR (U11/U12 also didn't name one). Encoding footnote: `alerts.yml` was originally written with a
+  `§` character in comments/descriptions, which came back corrupted (`Â§`) when read through
+  Prometheus's own `/api/v1/rules` REST API — root cause not fully diagnosed (file itself confirmed
+  valid UTF-8), fixed pragmatically by rewriting the file in plain ASCII, re-verified clean via a
+  fresh API query after a container restart. One real bug found by the load test itself, outside its
+  own scope: the full workspace suite (run before committing, as always) failed
+  `aggregator/tests/test_kafka_resumability.py::test_fresh_analytics_consumer_replays_full_history_from_beginning`
+  — `seen == []`, a fresh from-earliest consumer group found nothing within its 20s wait budget. Root
+  cause confirmed by direct measurement, not assumed: the k6 runs had pushed the shared local
+  `tool-events` topic to 22,205 messages (`kafka-get-offsets.sh`), and a probe run with a much wider
+  window showed the real replay takes ~71s on this single-broker, single-partition dev Kafka — the
+  test passed once given enough time, so this was never a correctness bug, only a hardcoded 20s bound
+  that had an unstated small-topic assumption (a real production analytics consumer's first-ever
+  replay against real historical volume would hit the same shape of problem). Purging the topic to
+  restore a clean baseline was attempted first but blocked by the permission classifier as a
+  destructive action on shared infra — the right call, so the fix instead widens the test's wait
+  budget to 1800 (180s; the loop still exits the instant all 3 messages are seen, so this costs
+  nothing in CI's always-fresh, empty-topic case). Full workspace suite re-run after the fix: 208
+  passed. Otherwise no application code changed in this phase (only `infra/` config, the k6 script,
+  `README.md`, and this one test-timeout hardening), so no new pytest milestone test was written — the
+  deliverable is the measurement and the alerting rules, not new application behavior.
+- U14–U16: not started.
 
 ### ADR checklist (mirrors `ADR_INDEX.md`)
 - [x] ADR-001: PostgreSQL as source of truth — `docs/adr/ADR-001-...md`.
@@ -1144,9 +1197,13 @@ confirmed still on Postgres LISTEN/NOTIFY per v1 design) — no mismatch found.
   `docs/adr/ADR-017-call-state-machine-modeling.md`.
 
 ### Chaos / load test status
-Not started (U13/U14). U3's three real bugs (above) were found via ordinary milestone-test failures,
-not a dedicated chaos exercise — genuine findings, documented here per the same honesty standard
-chaos/load results will need, but not a substitute for U13/U14's actual chaos suite.
+**Load testing (U13): done — see the U13 entry above and `README.md`'s "v2 load test" section for the
+full results table.** The system misses its own `/intercept` p99 < 50ms SLO at every tested level at
+or above 50 RPS; real evidence (~75% single-core CPU at 25 RPS) implicates single-process CPU-bound
+saturation. No fix attempted this phase, per the "document the failure" rule. Chaos testing (U14):
+not started. U3's three real bugs (above) were found via ordinary milestone-test failures, not a
+dedicated chaos exercise — genuine findings, documented here per the same honesty standard chaos/load
+results will need, but not a substitute for U14's actual chaos suite.
 
 ## Known deviations from BUILD_PLAN.md
 - None in phase *order*. Implementation-level deviations from the original spec docs, all flagged in

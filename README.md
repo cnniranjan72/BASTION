@@ -61,6 +61,78 @@ flagged explicitly, confirmed with the project owner, and documented in `docs/de
 than silently optimized away or silently left unexplained. Full methodology, more context on measurement
 variance, and reproduction steps: `infra/load-test/README.md`.
 
+### v2 load test (U13, `infra/k6/intercept_load_test.js`) — a real regression, reported honestly
+
+The numbers above are v1's. Re-run against the current (post-U1–U13) codebase, on this same local dev
+machine, results are dramatically worse — reported here in full rather than replacing/hiding the v1
+numbers, because the comparison itself is the finding:
+
+| target RPS | achieved iters/s | p95 | p99-equiv (p95 shown, see note) | error rate |
+|---|---|---|---|---|
+| 1 (baseline, ~zero concurrency) | ~1 | 127ms | — | 0% |
+| 10 | ~9.4 | 109ms | — | 0% |
+| 25 (run 1) | ~22.8 | 758ms | — | 0% |
+| 25 (run 2) | ~23.1 | 132ms | — | 0% |
+| 50 | ~25 (short of target) | 5.37s | — | 0% |
+| 100 | ~22.6 (well short) | 10.62s | — | 0% |
+| 500 | ~61 (system falling over) | 41.02s | — | **58.9% failed** |
+| 1,000 | ~301 (mostly failures) | — | — | **94.1% failed** |
+| 5,000 | ~483 (mostly failures) | — | — | **98.0% failed** |
+
+**This does not meet the p99 < 50ms SLO at any sustained concurrent load level tested** — the honest
+number, not a hopeful one. The 25 RPS run-to-run variance (758ms vs. 132ms p95, same target, back to
+back) is itself informative: this local dev environment's numbers are noisy, not perfectly
+reproducible, and that noise is reported rather than smoothed over by picking the nicer run.
+
+**Where latency actually inflects**: between roughly 10 and 25 target RPS — well before any request
+starts *failing* (0% errors all the way to the 500 RPS level, where the system starts actively
+rejecting the majority of requests). This is a "requests queue and get slow" failure shape, not a
+"requests get rejected" one, until concurrency gets extreme.
+
+**Two real, methodology-relevant differences from v1's numbers, disclosed rather than glossed over**:
+1. This test's each iteration calls `/intercept` *and* `POST /spans/{id}/complete` (v1's script only
+   ever called `/intercept`) — roughly double the synchronous Postgres write work per iteration,
+   matching a real SDK caller's actual behavior, but not a like-for-like comparison to v1's number.
+2. This is the current codebase after U1–U13, not v1's — every phase in between added real work to
+   (or near) the hot path: OTel span creation/export queuing (U12), the circuit breaker and
+   `limits:` checks' Redis round-trips (U6), `object_storage.upload_if_large`'s size-check JSON
+   serialization on every payload (U9), RLS's second connection pool existing alongside the first
+   (U8, though not on this specific endpoint's read path). None of these were present when v1's
+   45ms p99 was measured.
+
+**Most likely dominant contributor, with real evidence, not just a guess**: the interceptor runs as a
+single uvicorn worker process (no `workers=N`), and Python's asyncio event loop is fundamentally
+single-threaded for CPU-bound work. Sampled directly during a 25 RPS run: **~75% of one CPU core**,
+already close to saturating that one thread at a small fraction of the nominal load levels tested.
+Once that one thread saturates, every in-flight request's JSON/Pydantic/OTel/policy-evaluation work
+queues behind it — exactly the "latency balloons well before anything fails" shape observed. This is
+evidence, not a fully isolated root cause: a proper isolation pass (measuring with OTel disabled, with
+the circuit breaker/limits checks disabled, with `/spans/{id}/complete` removed from the iteration,
+each independently) would be needed to attribute the regression precisely across those U1–U13
+additions — not performed in this pass, flagged as a real follow-up rather than claimed done.
+
+**Also observed, a separate finding from the latency one**: `bastion_outbox_unpublished_total` grew to
+17,267 during these runs, unbounded — this test setup ran the interceptor standalone without also
+running a separate `OutboxPublisher` process (`python -m bastion_interceptor.outbox_publisher`), which
+in a real deployment runs as its own independently-scaled process (ADR-003). This is a test-setup gap,
+not a discovered production bug — noted so a future session doesn't mistake a growing backlog for
+evidence the publisher itself is broken.
+
+**Scope, stated explicitly**: U13 asks to measure and identify the bottleneck, not to fix it — no
+performance work was done in response to this finding. Optimizing the hot path (candidates: running
+uvicorn with multiple workers, making the circuit-breaker/limits Redis calls concurrent rather than
+sequential, batching OTel span export more aggressively, revisiting whether every one of U6/U9/U12's
+additions needs to run on the synchronous path at all) is real, legitimate future work this finding
+directly motivates — not attempted here. This also newly informs ADR-010's deferred PgBouncer/read-
+replica decision: connection pooling wasn't ruled out here (the DB pool wasn't observed saturated
+post-run), but this is the first real load-test evidence gathered since that ADR was written, and it
+should be revisited alongside whatever U13 root-causing eventually happens.
+
+Reproduce: `docker run --rm -e BASE_URL=http://host.docker.internal:4011 -e TARGET_RPS=50
+-e DURATION=20s -v "$(pwd)/infra/k6:/scripts" grafana/k6 run /scripts/intercept_load_test.js`
+(with the interceptor running standalone on port 4011 and its full dependency stack — Postgres,
+Redis, Kafka, MinIO, Jaeger — up via `docker compose -f infra/docker/docker-compose.yml up -d`).
+
 ## Architecture
 
 ```mermaid

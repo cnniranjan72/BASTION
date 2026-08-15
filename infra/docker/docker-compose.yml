@@ -136,7 +136,10 @@ services:
     container_name: bastion-prometheus
     restart: unless-stopped
     volumes:
-      - ../prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      # U13 (v2 upgrade): the whole directory, not just prometheus.yml —
+      # alerts.yml (referenced by prometheus.yml's rule_files) needs to be
+      # present alongside it inside the container too.
+      - ../prometheus:/etc/prometheus:ro
     ports:
       - '9090:9090'
 

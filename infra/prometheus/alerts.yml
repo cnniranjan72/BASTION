@@ -1,0 +1,60 @@
+# U13 (v2 upgrade), UPGRADE_ARCHITECTURE.md section 15: "define, measure,
+# alert -- in that order." These rules turn the SLO table into actual
+# Prometheus alerting rules -- the "target with no measurement behind it
+# is a claim, not an SLO" chain section 15 asks for, now with alerting as
+# its final link.
+#
+# "/intercept p99 < 50ms" and "policy decision p99 < 10ms" are both
+# measured directly (intercept_latency_seconds is exactly and only the
+# /intercept handler's own duration; policy.evaluate's own OTel span, not
+# a Prometheus metric, covers the in-process policy-decision figure -- no
+# separate histogram was built for it, since U13's own load test found the
+# SLO isn't being met at the outer layer already; a dedicated inner-layer
+# alert would be premature before that's addressed).
+# Event durability and WebSocket propagation latency don't have a
+# corresponding Prometheus metric built yet (see docs/PROGRESS.md's U13
+# entry) -- their rows are omitted here rather than faked with a metric
+# that doesn't exist.
+
+groups:
+  - name: bastion_slo
+    rules:
+      - alert: InterceptLatencyP99High
+        expr: histogram_quantile(0.99, sum(rate(intercept_latency_seconds_bucket[5m])) by (le)) > 0.05
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: "/intercept p99 latency above the 50ms SLO for 5 minutes"
+          description: "UPGRADE_ARCHITECTURE.md section 15's target: p99 < 50ms. Currently {{ $value | humanizeDuration }}."
+
+      - alert: InterceptorAvailabilityLow
+        expr: |
+          sum(rate(interceptor_http_requests_total{status_code=~"5.."}[5m]))
+          /
+          sum(rate(interceptor_http_requests_total[5m]))
+          > 0.001
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: "Interceptor 5xx error rate above what a 99.9% availability SLO allows"
+          description: "UPGRADE_ARCHITECTURE.md section 15's target: 99.9% availability (0.1% error budget)."
+
+      - alert: OutboxBacklogGrowing
+        expr: bastion_outbox_unpublished_total > 1000
+        for: 10m
+        labels:
+          severity: warn
+        annotations:
+          summary: "outbox_events unpublished backlog exceeds 1000 rows for 10 minutes"
+          description: "Not a named SLO row directly, but the leading indicator for event-durability risk (section 15) -- a stalled outbox publisher would show up here before it shows up as lost events."
+
+      - alert: DbPoolNearSaturation
+        expr: interceptor_db_pool_in_use / interceptor_db_pool_size > 0.9
+        for: 5m
+        labels:
+          severity: warn
+        annotations:
+          summary: "Interceptor's Postgres connection pool over 90% utilized for 5 minutes"
+          description: "USE saturation signal -- U13's own load test found evidence the hot path may be bottlenecked well before this threshold; this alert exists to catch the specific case where the pool itself is the limiting resource, distinct from single-process CPU saturation (see README.md's v2 load test writeup)."

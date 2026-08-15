@@ -235,7 +235,18 @@ async def test_fresh_analytics_consumer_replays_full_history_from_beginning(
     consumer = KafkaEventConsumer(group_id=group_id)
     await consumer.start(handler)
     try:
-        for _ in range(200):
+        # U13 finding: this bound was originally 200 (20s), which assumed a
+        # small topic. U13's own k6 load test pushed the shared local
+        # tool-events topic to 22K+ messages, and a real from-earliest full
+        # replay against that volume took ~71s on this single-broker,
+        # single-partition dev setup — confirmed by direct measurement, not
+        # guessed. A production analytics consumer doing its first-ever
+        # replay against real historical volume faces the same shape of
+        # problem, so 20s was always an unstated small-topic assumption, not
+        # a real bound on this test's own scenario. Widened to 1800 (180s);
+        # the loop still exits the moment all 3 messages are seen, so this
+        # costs nothing in CI's always-fresh, empty-topic case.
+        for _ in range(1800):
             if len(seen) >= 3:
                 break
             await asyncio.sleep(0.1)
