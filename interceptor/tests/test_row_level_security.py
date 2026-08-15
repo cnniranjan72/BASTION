@@ -13,6 +13,7 @@ code.
 
 from __future__ import annotations
 
+import os
 import uuid
 from uuid import UUID
 
@@ -20,7 +21,7 @@ import asyncpg
 import pytest
 from bastion_interceptor.db import db
 
-DATABASE_URL = "postgresql://bastion:bastion@localhost:5442/bastion"
+DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://bastion:bastion@localhost:5442/bastion")
 
 
 async def _make_org_with_agent() -> tuple[UUID, UUID]:

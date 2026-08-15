@@ -125,7 +125,14 @@ jobs:
       - run: uv run ruff check .
       - run: uv run ruff format --check .
       - run: uv run mypy shared/src interceptor/src aggregator/src sdk-python/bastion demo-agent/demo_agent
-      - run: uv run pytest shared/tests interceptor/tests aggregator/tests sdk-python/tests demo-agent/tests
+      # U14's chaos suite (aggregator/tests/chaos/) drives real infra outages via
+      # `docker stop`/`docker start` on the literal container names
+      # `bastion-kafka`/`bastion-redis` from infra/docker/docker-compose.yml.
+      # GitHub Actions' `services:` containers have no such fixed names (and
+      # stopping a shared service container mid-job isn't meaningful here
+      # anyway) — this suite is real-infra-chaos-local-only by design, run via
+      # `uv run pytest aggregator/tests/chaos` against docker-compose, not in CI.
+      - run: uv run pytest shared/tests interceptor/tests aggregator/tests sdk-python/tests demo-agent/tests --ignore=aggregator/tests/chaos
 
   frontend:
     name: Frontend (typecheck, lint)

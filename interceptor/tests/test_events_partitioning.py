@@ -6,6 +6,7 @@ synthetic months, assert queries correctly hit only relevant partitions
 
 from __future__ import annotations
 
+import os
 import uuid
 from datetime import UTC, datetime
 from uuid import UUID
@@ -13,7 +14,7 @@ from uuid import UUID
 import asyncpg
 from bastion_interceptor.db import db
 
-DATABASE_URL = "postgresql://bastion:bastion@localhost:5442/bastion"
+DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://bastion:bastion@localhost:5442/bastion")
 
 
 async def _insert_event_at(
