@@ -92,6 +92,11 @@ jobs:
       # remapped 4319.
       OTEL_EXPORTER_OTLP_ENDPOINT: http://localhost:4318
       JAEGER_QUERY_URL: http://localhost:16686
+      # U17: BYOK LLM credentials (ADR-022) — crypto.py fails closed with
+      # no default, so any test touching /llm-keys or /demo/live-run needs
+      # this set. A fixed CI-only key, not a secret: nothing encrypted
+      # under it outlives the job.
+      BYOK_MASTER_KEY: gU1I0XpyRqZsSaXFEjgYod0+6Mu/1773u4z7+fLMkQk=
     steps:
       - uses: actions/checkout@v4
       - name: Install uv

@@ -228,6 +228,14 @@ Flagged to the user rather than guessed; decision (confirmed): `demo-agent/demo_
 
 **Bug found while verifying this scenario live in the browser** (not caught by any existing test, since `aggregator/tests/test_live_ws.py`'s only blocked-call coverage came later, added specifically because of this): the live WebSocket delta path silently dropped a blocked/failed call's `reason`. `fold_events_to_graph` (§14) correctly populates `GraphNode.reason` from the event payload, and `GET /traces/{id}` (replay) returns it — but `_handle_notification`'s `NodeUpdatedMessage` (aggregator `main.py`) only ever carried `status`/`latency_ms`/`cost`, never `reason`, so a viewer watching a call get blocked *live* saw the node turn red with no explanation, while the same trace viewed via replay afterward showed the reason correctly. Fixed by adding `reason` to `NodeUpdatedMessage` (`shared/src/bastion_shared/realtime.py`) and passing `node.reason` through in the aggregator; mirrored in the frontend's hand-written `LiveMessage` type and the graph store's delta-application logic. Regression-tested (`aggregator/tests/test_blocked_call_delta_includes_the_block_reason`) and confirmed live in-browser against the real running stack.
 
+**U17 addendum (`docs/adr/ADR-022`)**: the reasoning above was scoped to *this specific scenario's
+automated reliability test* (`demo-agent/tests/test_scenario.py`'s 20-run check), not to "this
+system must never make a real LLM call." `POST /demo/live-run` (interceptor) and
+`demo-agent/demo_agent/llm_agent.py` (local CLI, `--llm ollama`/`openai`/`anthropic`/`gemini`) both
+add a real, user-triggered, intentionally-nondeterministic LLM decision against the same scenario —
+additive to this section's decision, never part of CI, and the deterministic stand-in above remains
+untouched as the default and as what the reliability test actually exercises.
+
 ## 18. Event writes on `/intercept` are synchronous, not fire-and-forget (Phase 9)
 
 §2.2 above and `docs/CLAUDE.md` rule #4 both say event writes on the latency-critical path should be fire-and-forget/async, with the policy decision itself waiting on nothing but the in-memory policy cache. The actual code (`POST /intercept`, `main.py`) has never matched that: every `CallAttempted`/`CallAllowed`/`CallBlocked`/`CallPendingApproval` write is `await`ed inline, including `CallAttempted` before the policy decision even runs — true since Phase 1, never flagged until Phase 9's load test made it a numbers question rather than an abstract one.

@@ -1,0 +1,36 @@
+# ADR-022: BYOK LLM credential storage and a real (non-scripted) live agent runner
+
+## Status
+Accepted (unlisted — U17; following the ADR-017/018/019/020 precedent for a non-obvious decision worth recording anyway)
+
+## Context
+The user asked for three things together: local use via Ollama, production users bringing their own OpenAI/Anthropic/Gemini API key, and "handle user-side API key limits properly." All three converge on one real, security-sensitive feature: BASTION's hosted deployment needs to accept, store, and later use a user-supplied third-party API key to run a *real* LLM-backed agent loop server-side — not just document how to configure one locally.
+
+This is a genuinely different secret-storage problem than anything already in the schema. `agents.api_key_hash` and `api_tokens.token_hash` (`docs/DATA_MODEL.md`) are both SHA-256 hashes — correct for those, because the only thing ever needed is a lookup/comparison, never the plaintext back. A user's OpenAI/Anthropic/Gemini key is different: BASTION must present the *plaintext* key to the provider's API on every call, so hashing is not an option — this needs reversible encryption, a new capability for this codebase.
+
+It also intersects `docs/ARCHITECTURE.md` §17, which documents that `demo-agent`'s tool-selection is a deterministic regex stand-in for an LLM decision, specifically because no LLM API key was available and a live nondeterministic call would make the existing 20-run reliability test flaky by nature, not by bug. That reasoning was scoped to *that specific scenario's automated test*, not to "BASTION must never make a real LLM call" — a user-triggered, on-demand live run (not part of the CI reliability suite) doesn't have that constraint.
+
+## Options considered
+1. **Local/documentation-only**: `demo-agent` gains a pluggable local LLM backend (Ollama, or a cloud key via env var), no BASTION backend changes. Rejected as the sole answer — user explicitly confirmed they want the hosted product to let a visitor paste a key and watch a real LLM get blocked, not just a better local dev story. (Still built as a side effect, since the same abstraction serves both — see Decision.)
+2. **Store keys in plaintext**: simplest, rejected outright — a leaked database dump would hand out every user's live OpenAI/Anthropic/Gemini credentials. Not defensible for a security product whose entire pitch is "we take credential handling seriously."
+3. **Store keys hashed, like `api_tokens`**: rejected — a hash cannot be reversed to call the provider's API. Not applicable to this problem, only listed to make clear it was considered and is wrong here, not merely undiscussed.
+4. **Reversible encryption at rest (AES-256-GCM), server-held master key, decrypt only at call time**: chosen. Matches how every production secrets-manager pattern (Vault, KMS-wrapped DEKs) handles this exact "must recover plaintext, but not a password" case, without pulling in an external KMS dependency this project has no infrastructure for yet.
+5. **Real LLM call folded into the existing scripted scenario/test**: rejected — would reintroduce exactly the flakiness §17 already ruled out. Instead, built as a separate, explicitly user-triggered endpoint (`POST /demo/live-run`) alongside the untouched deterministic scenario; the existing 20-run reliability test keeps testing the deterministic path only.
+
+## Decision
+- New table `llm_credentials` (migration `0014_llm_credentials.sql`): stores `key_ciphertext` + `key_nonce` (AES-256-GCM, `cryptography` library's `AESGCM`), never the plaintext, plus `key_last4` for display. Master key comes from `BYOK_MASTER_KEY` (32-byte, base64), an env var — never checked in, generated the same way `infra/keys/generate_dev_keys.py` already generates the JWT keypair for local dev/CI.
+- Personal, not org-shared (mirrors `api_tokens`: `user_id`-scoped list/revoke, `org_id` carried for RLS only) — a pasted key belongs to the human who pasted it, not automatically visible to teammates.
+- Decryption happens in exactly one place: immediately before a provider HTTP call, inside the live-run request handler. The plaintext key is never logged, never returned by any endpoint (list/get only ever return `key_last4`), and never persisted anywhere outside the encrypted column.
+- A new shared module (`bastion_shared.llm`) abstracts OpenAI/Anthropic/Gemini/Ollama tool-calling behind one interface via direct HTTP calls (`httpx`), not each provider's heavyweight SDK — kept deliberately thin since only tool-call decisions are needed, not full chat-app features. This same module is what lets `demo-agent` optionally point at local Ollama (Option 1), so building the hosted feature doesn't throw away the local story — it subsumes it.
+- Provider auth failures (401) and rate/quota failures (429) are caught and surfaced as distinct, structured error codes (`LLM_KEY_INVALID`, `LLM_RATE_LIMITED`) rather than a generic 500 — this is the concrete answer to "handle user-side API key limits properly": BASTION cannot raise or track a limit that belongs to the user's own provider account, but it can fail legibly instead of opaquely when that limit is hit.
+- `POST /demo/live-run` reuses the *same* ticket-injection scenario and the *same* real interceptor/policy-engine path the scripted demo already exercises — the only thing that changes is who decides which tool to call: the stored/local LLM instead of `tools.parse_injected_transfer`. This is additive, not a replacement of §17's decision.
+
+## Consequences
+Real new attack surface: a database compromise now has an encrypted-but-present blob of third-party API keys, and a `BYOK_MASTER_KEY` compromise (env var exposure) would let an attacker decrypt all of them. This is the accepted tradeoff of the feature existing at all — mitigated by never logging plaintext, decrypting only transiently at call time, and documenting the master-key rotation story as a known gap (rotation requires re-encrypting all rows; not built in this phase — see Failure modes).
+
+A live LLM run is nondeterministic and costs the user's own provider quota per invocation — it is user-triggered only, never run automatically, never part of CI.
+
+## Failure modes
+- **Master key rotation is not implemented.** Rotating `BYOK_MASTER_KEY` today would make every existing `llm_credentials` row undecryptable. Documented, not solved — a real deployment operating this long-term would need a key-versioning column (`key_version`) and a re-encryption migration path before rotating. Flagged rather than silently assumed away.
+- **No per-credential spend/quota tracking beyond surfacing the provider's own 429.** BASTION does not know a user's actual OpenAI/Anthropic/Gemini plan limits — it can only relay what the provider says on a given call. A future phase wanting proactive warnings ("you're near your quota") would need to track usage against a user-declared budget, which does not exist here.
+- **If Ollama is later exposed over the network for the hosted path** (not this phase — Ollama here is local-only, reachable by `demo-agent` running on the same machine as the model), this ADR's threat model does not cover that; local Ollama use never touches `llm_credentials` at all, since there is no key to store.

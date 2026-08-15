@@ -4,8 +4,9 @@
 All of `docs/BUILD_PLAN.md` (Phases 0-9) plus the final documentation set are done, plus every
 post-launch follow-up requested since: signup/registration, Neon Postgres connection, agents/policies/
 approvals management UI, visual design pass, Team/RBAC + Overview, Traces/Analytics/command palette,
-usability fixes + personal API tokens + Account page, and now a live Render deployment. Live at
-[bastion-frontend.onrender.com](https://bastion-frontend.onrender.com).
+usability fixes + personal API tokens + Account page, a live Render deployment, U16's 7 supporting
+surfaces, and U17's BYOK LLM credentials + real live-LLM agent demo + local Ollama support + in-app
+docs. Live at [bastion-frontend.onrender.com](https://bastion-frontend.onrender.com).
 
 ## Log
 - [2026-08-14] Project specced out (PRD, ARCHITECTURE, DATA_MODEL, AUTH, API_SPEC, BUILD_PLAN written). No code yet.
@@ -1560,6 +1561,100 @@ confirmed still on Postgres LISTEN/NOTIFY per v1 design) — no mismatch found.
   environment under controlled load, is the concrete next step — not
   done here.
 
+- **U17 — BYOK LLM credentials + a real (non-scripted) live agent runner,
+  local Ollama support, and in-app documentation.** User request, split into
+  the pieces that could be built responsibly: a real py-spy-profiled
+  latency fix (done first, see the "Post-U16" entry above — unrelated to
+  this feature, done as a prerequisite before touching anything new), then
+  this. Full design reasoning in `docs/adr/ADR-022`.
+
+  What shipped:
+  - **`llm_credentials` table** (migration `0014`, RLS per migration 0010's
+    pattern) storing a user-supplied OpenAI/Anthropic/Gemini API key —
+    **reversibly encrypted** (AES-256-GCM, `bastion_shared/crypto.py`,
+    `BYOK_MASTER_KEY` env var), a deliberate departure from every other
+    secret in this schema (`agents.api_key_hash`, `api_tokens.token_hash`),
+    both one-way SHA-256 hashes, because BASTION must hand this one back to
+    the provider in plaintext on each call. Fails closed with no default —
+    no key storage or use is possible without the env var set, not a silent
+    fallback to something less safe.
+  - **`bastion_shared/llm.py`**: a thin, provider-agnostic tool-calling
+    client (direct `httpx` calls, not each provider's SDK) for OpenAI,
+    Anthropic, Gemini, and local Ollama. Distinguishes auth failures (401 →
+    `LLMAuthError`) from rate/quota failures (429 → `LLMRateLimitedError`)
+    from everything else — the concrete answer to "handle user-side API key
+    limits properly": BASTION can't raise a user's own provider-side limit,
+    but it fails legibly instead of opaquely when one is hit.
+  - **`POST /llm-keys` (GET/POST/DELETE)**: store/list/revoke a credential,
+    mirroring `api_tokens`' personal-not-org-shared scoping exactly. List
+    responses only ever carry `key_last4` — the plaintext is never returned,
+    logged, or stored outside the encrypted column.
+  - **`POST /demo/live-run`**: the actual new capability — a real LLM
+    (stored BYOK key, or local Ollama, no key needed) decides which tool to
+    call against the *same* ticket-injection scenario `demo-agent` runs on
+    a schedule with a deterministic stand-in (`docs/ARCHITECTURE.md` §17).
+    Every tool call it decides to make goes through the exact same
+    `_decide_and_record` real-policy-engine path `/intercept` itself
+    uses — reused directly, not reimplemented. `get_or_create_live_demo_agent`
+    seeds a per-org demo agent + the same block-over-$100 policy
+    `demo-agent/seed.py` hardcodes for one fixed org, on demand, so any org
+    can run this with zero manual setup. This is additive to §17's decision,
+    not a reversal of it: the scripted scenario's 20-run reliability test
+    (CI-gated) is untouched; this is a separate, user-triggered,
+    intentionally-nondeterministic endpoint that never runs in CI.
+  - **`demo-agent/demo_agent/llm_agent.py`**: the same real-LLM mechanism,
+    reused for local use — `python -m demo_agent.run_demo --llm ollama`
+    (or `--llm openai`/`anthropic`/`gemini` with `LLM_API_KEY`). Additive;
+    `agent.py`'s deterministic scenario is the unchanged default.
+  - **Frontend**: `AccountPage` gained an "LLM provider keys" section
+    (add/list/revoke, masked) and a "Run the live prompt-injection demo"
+    trigger (provider + credential picker, step-by-step result, a link into
+    Incident Replay for the trace it just produced). New `/docs` page
+    (`DocsPage.tsx`, linked from the topbar's Admin group) covering
+    quickstart, local dev + Ollama setup, BYOK usage, a condensed real
+    endpoint reference, deployment notes, and a short architecture summary
+    — no fabricated content or guessed external URLs, everything either an
+    in-app route or a pointer to the real `docs/` files.
+
+  **Real bug found and fixed while browser-verifying this, not just
+  claimed working**: the first live end-to-end run against a real local
+  Ollama model (`llama3.1:8b`) failed with an unhandled `httpx.ReadTimeout`
+  → bare 500, because `llm.py`'s flat 30s timeout assumed cloud-API-like
+  latency — local CPU inference (plus a cold model load) legitimately took
+  longer. Fixed with a separate, larger, configurable Ollama timeout
+  (`OLLAMA_TIMEOUT_SECONDS`, default 180s) and a `try/except
+  httpx.TimeoutException` around the dispatch that turns *any* provider
+  timeout into a structured `LLMProviderError` instead of an unhandled
+  exception. Re-verified after the fix: a real end-to-end run completed in
+  ~55s, and — the actual point of the feature — **the local model fell for
+  the injected instruction and tried the $500 transfer, and the real policy
+  engine blocked it**, visible immediately after in Incident Replay for the
+  same trace, confirming the whole write → outbox → event-log → replay path
+  works for this new endpoint exactly like every other call path.
+
+  Also fixed while building this (found via the interceptor's own full test
+  suite going from 106 to 3 failures after adding `get_or_create_live_demo_agent`):
+  a jsonb double-encoding bug — `self.pool`'s connections have a jsonb type
+  codec registered (`_init_connection`) that encodes a raw Python object
+  automatically, so pre-serializing the policy definition with `json.dumps`
+  before insert (copied from `demo-agent/seed.py`, which uses a *plain*
+  `asyncpg.connect()` with no codec, where that's correct) double-encoded
+  it into a JSON string stored inside a jsonb column, which
+  `compile_policy_from_raw`'s pydantic validation then rejected as "not a
+  list." Fixed by passing the raw Python list directly, matching
+  `create_policy`'s existing convention on the same pool — caught before
+  merge, not shipped.
+
+  **Scope, stated explicitly**: master-key rotation for `BYOK_MASTER_KEY`
+  is not implemented (documented as a known gap in ADR-022's Failure modes
+  — rotating it today would make every stored credential undecryptable).
+  No per-credential spend/quota tracking beyond relaying the provider's own
+  429 — BASTION doesn't know a user's actual plan limits. "Solidly usable
+  by real users" beyond this feature (broader usability hardening) was not
+  separately scoped or attempted this session — the request's other parts
+  (BYOK, Ollama, limit handling, documentation) were interpreted as the
+  concrete, buildable expression of that goal.
+
 ### ADR checklist (mirrors `ADR_INDEX.md`)
 - [x] ADR-001: PostgreSQL as source of truth — `docs/adr/ADR-001-...md`.
 - [x] ADR-002: Kafka for event distribution (not source of truth) — `docs/adr/ADR-002-...md`.
@@ -1581,6 +1676,8 @@ confirmed still on Postgres LISTEN/NOTIFY per v1 design) — no mismatch found.
   `docs/adr/ADR-020-policy-simulator-and-propagation-status-scope.md`.
 - [x] ADR-021 (unlisted, added U16): real metric definitions for the 7 supporting surfaces — see
   `docs/adr/ADR-021-supporting-surfaces-metric-definitions.md`.
+- [x] ADR-022 (unlisted, added U17): BYOK LLM credential storage (reversible encryption) and a real
+  live agent runner — see `docs/adr/ADR-022-byok-llm-credentials-and-live-agent-runner.md`.
 
 ### Chaos / load test status
 **Load testing (U13): done — see the U13 entry above and `README.md`'s "v2 load test" section for the

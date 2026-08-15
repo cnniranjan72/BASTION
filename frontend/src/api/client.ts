@@ -10,6 +10,9 @@ import type {
   CreateApiTokenResponse,
   CreateUserResponse,
   ErrorResponse,
+  LiveDemoRunResponse,
+  LlmCredential,
+  LlmProvider,
   Policy,
   PolicyPropagationResponse,
   RawEvent,
@@ -137,6 +140,21 @@ export const api = {
     }),
   revokeApiToken: (id: string) =>
     request<void>(INTERCEPTOR_BASE, `/api-tokens/${id}`, { method: "DELETE" }),
+
+  // U17 (BYOK — `docs/adr/ADR-022`).
+  listLlmCredentials: () => request<LlmCredential[]>(INTERCEPTOR_BASE, "/llm-keys"),
+  createLlmCredential: (provider: LlmProvider, label: string, api_key: string) =>
+    request<LlmCredential>(INTERCEPTOR_BASE, "/llm-keys", {
+      method: "POST",
+      body: JSON.stringify({ provider, label, api_key }),
+    }),
+  revokeLlmCredential: (id: string) =>
+    request<void>(INTERCEPTOR_BASE, `/llm-keys/${id}`, { method: "DELETE" }),
+  runLiveDemo: (provider: LlmProvider | "ollama", credentialId: string | null) =>
+    request<LiveDemoRunResponse>(INTERCEPTOR_BASE, "/demo/live-run", {
+      method: "POST",
+      body: JSON.stringify({ provider, credential_id: credentialId }),
+    }),
 
   listUsers: () => request<TeamMember[]>(INTERCEPTOR_BASE, "/users"),
   createUser: (email: string, role: UserRole) =>

@@ -50,6 +50,16 @@ Log into `http://localhost:5173` with `demo@bastion.dev` / `demo-password-123`, 
 to agent `44444444-4444-4444-4444-444444444444`, then run `run_demo.py` again and watch the blocked
 call turn red in the graph in real time.
 
+**Optional — BYOK / live LLM demo (U17, `docs/adr/ADR-022`)**: to use the "LLM provider keys" and
+"Run the live prompt-injection demo" sections on `/account`, the interceptor needs
+`BYOK_MASTER_KEY` set (generate one with
+`uv run python -c "import base64,os; print(base64.b64encode(os.urandom(32)).decode())"`) — without
+it, that feature fails closed rather than silently storing keys unsafely. For local Ollama (no key
+needed): install Ollama, `ollama pull llama3.1`, and it's used automatically when you pick
+"ollama (local)" in the demo's provider dropdown (`OLLAMA_BASE_URL` defaults to
+`http://localhost:11434`). See `frontend/src/components/DocsPage.tsx` (`/docs` once logged in) for
+the full walkthrough.
+
 ## Option 2: full Docker Compose stack
 
 ```bash

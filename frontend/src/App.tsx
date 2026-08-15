@@ -13,6 +13,7 @@ import { AnalyticsPage } from "./components/AnalyticsPage";
 import { ThreatCenterPage } from "./components/ThreatCenterPage";
 import { CostCenterPage } from "./components/CostCenterPage";
 import { AccountPage } from "./components/AccountPage";
+import { DocsPage } from "./components/DocsPage";
 import { ToastHost } from "./components/ToastHost";
 import { CommandPalette } from "./components/CommandPalette";
 import { IncidentReplayPage } from "./components/Replay/IncidentReplayPage";
@@ -142,6 +143,14 @@ export function App() {
           element={
             <RequireAuth>
               <AccountPage />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/docs"
+          element={
+            <RequireAuth>
+              <DocsPage />
             </RequireAuth>
           }
         />

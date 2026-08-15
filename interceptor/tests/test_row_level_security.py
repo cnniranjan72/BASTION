@@ -91,6 +91,62 @@ async def test_superuser_connection_is_unaffected_by_rls() -> None:
     assert agent_b in visible_ids
 
 
+async def test_llm_credentials_isolated_by_rls_with_no_application_filter() -> None:
+    """U17 (ADR-022): same proof as test_rls_blocks_cross_org_read_with_no_
+    application_filter above, for the newest RLS-enabled table — a stored
+    BYOK credential is exactly the kind of row a cross-org leak would be
+    worst for."""
+    org_a, _ = await _make_org_with_agent()
+    org_b, _ = await _make_org_with_agent()
+
+    conn = await asyncpg.connect(DATABASE_URL)
+    try:
+        user_a = uuid.uuid4()
+        user_b = uuid.uuid4()
+        credential_a = uuid.uuid4()
+        credential_b = uuid.uuid4()
+        await conn.execute(
+            "INSERT INTO users (id, org_id, email, password_hash, role) "
+            "VALUES ($1, $2, $3, 'x', 'owner')",
+            user_a,
+            org_a,
+            f"{user_a}@example.com",
+        )
+        await conn.execute(
+            "INSERT INTO users (id, org_id, email, password_hash, role) "
+            "VALUES ($1, $2, $3, 'x', 'owner')",
+            user_b,
+            org_b,
+            f"{user_b}@example.com",
+        )
+        await conn.execute(
+            "INSERT INTO llm_credentials "
+            "(id, org_id, user_id, provider, label, key_ciphertext, key_nonce, key_last4) "
+            "VALUES ($1, $2, $3, 'openai', 'a', 'x', 'y', '0000')",
+            credential_a,
+            org_a,
+            user_a,
+        )
+        await conn.execute(
+            "INSERT INTO llm_credentials "
+            "(id, org_id, user_id, provider, label, key_ciphertext, key_nonce, key_last4) "
+            "VALUES ($1, $2, $3, 'openai', 'b', 'x', 'y', '1111')",
+            credential_b,
+            org_b,
+            user_b,
+        )
+    finally:
+        await conn.close()
+
+    async with db.org_scoped_connection(org_a) as scoped:
+        # Deliberately no WHERE org_id — Postgres alone must restrict this.
+        rows = await scoped.fetch("SELECT id FROM llm_credentials")
+    visible_ids = {r["id"] for r in rows}
+
+    assert credential_a in visible_ids
+    assert credential_b not in visible_ids
+
+
 async def test_list_agents_isolated_by_rls_not_application_filter() -> None:
     """The real, already-shipped call site (db.list_agents, used by
     GET /agents) — end-to-end proof the retrofit actually works, not just
@@ -115,6 +171,7 @@ async def test_list_agents_isolated_by_rls_not_application_filter() -> None:
         "users",
         "api_tokens",
         "idempotency_keys",
+        "llm_credentials",
     ],
 )
 async def test_every_scoped_table_has_row_level_security_enabled(table: str) -> None:

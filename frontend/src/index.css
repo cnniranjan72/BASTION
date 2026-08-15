@@ -1045,6 +1045,110 @@ a {
   max-width: 420px;
 }
 
+.docs-layout {
+  display: grid;
+  grid-template-columns: 200px minmax(0, 1fr);
+  gap: 2.5rem;
+  align-items: start;
+}
+.docs-toc {
+  position: sticky;
+  top: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 1rem 0;
+  border-right: 1px solid var(--border);
+}
+.docs-toc a {
+  color: var(--text-dim);
+  font-size: 0.85rem;
+  text-decoration: none;
+  transition: color var(--duration-fast) var(--ease);
+}
+.docs-toc a:hover {
+  color: var(--accent-bright);
+}
+.docs-content {
+  max-width: 720px;
+  min-width: 0;
+}
+.docs-section {
+  margin-bottom: 2.75rem;
+  padding-bottom: 2rem;
+  border-bottom: 1px solid var(--border);
+}
+.docs-section:last-child {
+  border-bottom: none;
+}
+.docs-section h2 {
+  font-size: 1.15rem;
+  margin: 0 0 0.9rem;
+  scroll-margin-top: 1rem;
+}
+.docs-section h3 {
+  font-size: 0.95rem;
+  margin: 1.5rem 0 0.6rem;
+  color: var(--text-dim);
+}
+.docs-section p {
+  color: var(--text-dim);
+  line-height: 1.65;
+  margin: 0 0 1rem;
+}
+.docs-section ul {
+  color: var(--text-dim);
+  line-height: 1.65;
+  padding-left: 1.2rem;
+  margin: 0 0 1rem;
+}
+.docs-section li {
+  margin-bottom: 0.5rem;
+}
+.docs-section code {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  background: var(--bg-panel-raised);
+  padding: 0.1em 0.4em;
+  border-radius: 4px;
+  color: var(--accent-bright);
+}
+.docs-section pre {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 1rem;
+  overflow-x: auto;
+  margin: 0 0 1rem;
+}
+.docs-section pre code {
+  background: none;
+  padding: 0;
+  color: var(--text);
+  font-size: 0.8rem;
+  line-height: 1.6;
+}
+.docs-section a {
+  color: var(--accent-bright);
+}
+.docs-inline-mono {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+}
+
+@media (max-width: 860px) {
+  .docs-layout {
+    grid-template-columns: 1fr;
+  }
+  .docs-toc {
+    position: static;
+    flex-direction: row;
+    flex-wrap: wrap;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+  }
+}
+
 .inline-form {
   display: flex;
   gap: 0.6rem;

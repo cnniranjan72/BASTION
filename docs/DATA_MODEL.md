@@ -46,6 +46,21 @@ Event sourcing for everything trace-related. Traditional CRUD for account/policy
 | last_used_at | timestamptz nullable | updated on every authenticated request the token makes |
 | revoked_at | timestamptz nullable | |
 
+### `llm_credentials` (added U17, not in the original spec — docs/adr/ADR-022)
+| column | type | notes |
+|---|---|---|
+| id | uuid pk | |
+| org_id | uuid fk | |
+| user_id | uuid fk | personal, not org-shared — same reasoning as `api_tokens` |
+| provider | text | `openai` \| `anthropic` \| `gemini` |
+| label | text | user-chosen, e.g. "personal OpenAI key" |
+| key_ciphertext | bytea | AES-256-GCM — **reversible**, unlike `agents.api_key_hash`/`api_tokens.token_hash`, because BASTION must present the plaintext to the provider on each call |
+| key_nonce | bytea | AES-GCM nonce, unique per encryption |
+| key_last4 | text | for display in the list UI, never the full key |
+| created_at | timestamptz | |
+| last_used_at | timestamptz nullable | updated on each live-run call that uses this credential |
+| revoked_at | timestamptz nullable | |
+
 ### `agents`
 | column | type | notes |
 |---|---|---|

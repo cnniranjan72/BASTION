@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import os
 import subprocess
@@ -32,6 +33,15 @@ def _migrated_database() -> None:
         cwd=REPO_ROOT,
         env={**os.environ, "DATABASE_URL": DATABASE_URL},
     )
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _byok_master_key() -> None:
+    # U17 (ADR-022): crypto.py fails closed with no default — tests that
+    # touch /llm-keys or /demo/live-run need this set. setdefault so CI's
+    # own explicit value (ci.yml) isn't overridden; local runs get a
+    # throwaway one, no manual setup needed.
+    os.environ.setdefault("BYOK_MASTER_KEY", base64.b64encode(os.urandom(32)).decode())
 
 
 @pytest.fixture(scope="session", autouse=True)

@@ -175,3 +175,12 @@ export const CostIcon = (p: IconProps) =>
 // U16 (v2 upgrade) — Agent Health.
 export const HealthIcon = (p: IconProps) =>
   base(<path d="M3.5 12h4l2-6 3 12 2-8 1.5 2h4.5" />, p);
+
+export const DocsIcon = (p: IconProps) =>
+  base(
+    <>
+      <path d="M6 3.5h9a1.5 1.5 0 0 1 1.5 1.5v14a1.5 1.5 0 0 1-1.5 1.5H6a1.5 1.5 0 0 1-1.5-1.5V5A1.5 1.5 0 0 1 6 3.5Z" />
+      <path d="M8 8h8M8 12h8M8 16h5" />
+    </>,
+    p,
+  );

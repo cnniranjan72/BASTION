@@ -40,6 +40,7 @@ from .call_state import (
     state_for_event,
     transition,
 )
+from .crypto import MasterKeyNotConfigured, decrypt_secret, encrypt_secret
 from .errors import BastionError, ErrorDetail, ErrorResponse
 from .events import (
     CallAttemptedPayload,
@@ -67,6 +68,21 @@ from .jwt_auth import (
 )
 from .kafka_auth import kafka_client_kwargs
 from .kafka_topics import TOOL_EVENTS_TOPIC
+from .live_demo_api import LiveDemoRunRequest, LiveDemoRunResponse, LiveDemoStep
+from .llm import (
+    LLMAuthError,
+    LLMDecision,
+    LLMProviderError,
+    LLMRateLimitedError,
+    ToolCallDecision,
+    ToolSpec,
+    call_llm_with_tools,
+)
+from .llm_credentials_api import (
+    CreateLlmCredentialRequest,
+    LlmCredentialResponse,
+    LlmProvider,
+)
 from .policy import Policy, PolicyDefinition, PolicyLimits, PolicyMatch, PolicyRule
 from .policy_api import (
     CreatePolicyRequest,
@@ -168,4 +184,20 @@ __all__ = [
     "LiveNode",
     "NodeAddedMessage",
     "NodeUpdatedMessage",
+    "MasterKeyNotConfigured",
+    "decrypt_secret",
+    "encrypt_secret",
+    "LLMAuthError",
+    "LLMDecision",
+    "LLMProviderError",
+    "LLMRateLimitedError",
+    "ToolCallDecision",
+    "ToolSpec",
+    "call_llm_with_tools",
+    "CreateLlmCredentialRequest",
+    "LlmCredentialResponse",
+    "LlmProvider",
+    "LiveDemoRunRequest",
+    "LiveDemoRunResponse",
+    "LiveDemoStep",
 ]

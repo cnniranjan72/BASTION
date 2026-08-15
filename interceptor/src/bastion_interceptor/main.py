@@ -59,6 +59,7 @@ from bastion_shared import (
     CreateAgentResponse,
     CreateApiTokenRequest,
     CreateApiTokenResponse,
+    CreateLlmCredentialRequest,
     CreatePolicyRequest,
     CreateUserRequest,
     CreateUserResponse,
@@ -68,6 +69,13 @@ from bastion_shared import (
     InterceptBlockedResponse,
     InterceptPendingResponse,
     InterceptRequest,
+    LiveDemoRunRequest,
+    LiveDemoRunResponse,
+    LiveDemoStep,
+    LLMAuthError,
+    LlmCredentialResponse,
+    LLMProviderError,
+    LLMRateLimitedError,
     LoginRequest,
     LogoutRequest,
     PolicyDecisionPayload,
@@ -82,7 +90,10 @@ from bastion_shared import (
     UpdateUserRoleRequest,
     UserResponse,
     UserRole,
+    call_llm_with_tools,
+    decrypt_secret,
     encode_access_token,
+    encrypt_secret,
     guard_event,
     state_for_event,
 )
@@ -92,7 +103,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from opentelemetry import trace as otel_trace
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
-from . import authorization, circuit_breaker, object_storage, tracing
+from . import authorization, circuit_breaker, live_demo, object_storage, tracing
 from . import limits as limits_engine
 from . import policy as policy_engine
 from .auth import AuthenticatedAgent, authenticate_agent, hash_api_key
@@ -1257,6 +1268,251 @@ async def revoke_api_token(
             },
         )
     return Response(status_code=204)
+
+
+# -- LLM credentials (U17, BYOK — ADR-022) ---------------------------------
+
+
+def _llm_credential_response(record: Any) -> LlmCredentialResponse:
+    return LlmCredentialResponse(
+        id=record["id"],
+        provider=record["provider"],
+        label=record["label"],
+        key_last4=record["key_last4"],
+        created_at=record["created_at"],
+        last_used_at=record["last_used_at"],
+        revoked_at=record["revoked_at"],
+    )
+
+
+@app.get("/llm-keys")
+async def list_llm_credentials(
+    user: AuthenticatedUser = require_any_role,
+) -> list[LlmCredentialResponse]:
+    records = await db.list_llm_credentials_for_user(user.id)
+    return [_llm_credential_response(r) for r in records]
+
+
+@app.post("/llm-keys", status_code=201)
+async def create_llm_credential(
+    body: CreateLlmCredentialRequest, user: AuthenticatedUser = require_any_role
+) -> LlmCredentialResponse:
+    # Reversible encryption, not the hash-only pattern api_tokens/agents
+    # use — BASTION must hand this back to the provider in plaintext on
+    # every /demo/live-run call (docs/adr/ADR-022). The plaintext itself
+    # is never stored, logged, or returned past this point.
+    ciphertext, nonce = encrypt_secret(body.api_key)
+    record = await db.create_llm_credential(
+        org_id=user.org_id,
+        user_id=user.id,
+        provider=body.provider,
+        label=body.label,
+        key_ciphertext=ciphertext,
+        key_nonce=nonce,
+        key_last4=body.api_key[-4:] if len(body.api_key) >= 4 else body.api_key,
+    )
+    log.info("llm credential created", user_id=str(user.id), provider=body.provider)
+    return _llm_credential_response(record)
+
+
+@app.delete("/llm-keys/{credential_id}", status_code=204)
+async def revoke_llm_credential(
+    credential_id: UUID, request: Request, user: AuthenticatedUser = require_any_role
+) -> Response:
+    record = await db.revoke_llm_credential(credential_id, user.id)
+    if record is None:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": {
+                    "code": "LLM_CREDENTIAL_NOT_FOUND",
+                    "message": f"no active LLM credential {credential_id}",
+                    "request_id": request.state.request_id,
+                }
+            },
+        )
+    return Response(status_code=204)
+
+
+@app.post("/demo/live-run")
+async def run_live_demo(
+    body: LiveDemoRunRequest, request: Request, user: AuthenticatedUser = require_any_role
+) -> LiveDemoRunResponse:
+    """A real LLM decides which tool to call against the same
+    prompt-injection ticket demo-agent runs on a schedule with a
+    deterministic stand-in (docs/ARCHITECTURE.md §17) — every tool call it
+    decides to make still goes through the real policy engine below, same
+    as any other agent. See docs/adr/ADR-022."""
+    api_key: str | None = None
+    credential_record: asyncpg.Record | None = None
+    if body.provider == "ollama":
+        if body.credential_id is not None:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": {
+                        "code": "OLLAMA_TAKES_NO_CREDENTIAL",
+                        "message": "provider=ollama runs locally and takes no credential_id",
+                        "request_id": request.state.request_id,
+                    }
+                },
+            )
+    else:
+        if body.credential_id is None:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": {
+                        "code": "CREDENTIAL_REQUIRED",
+                        "message": f"provider={body.provider} requires credential_id",
+                        "request_id": request.state.request_id,
+                    }
+                },
+            )
+        credential_record = await db.get_active_llm_credential_for_user(body.credential_id, user.id)
+        if credential_record is None or credential_record["provider"] != body.provider:
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error": {
+                        "code": "LLM_CREDENTIAL_NOT_FOUND",
+                        "message": f"no active {body.provider} credential {body.credential_id}",
+                        "request_id": request.state.request_id,
+                    }
+                },
+            )
+        api_key = decrypt_secret(
+            credential_record["key_ciphertext"], credential_record["key_nonce"]
+        )
+
+    demo_agent_record = await db.get_or_create_live_demo_agent(user.org_id)
+    await _reload_policy_set(demo_agent_record["default_policy_set_id"])
+    agent = AuthenticatedAgent(
+        id=demo_agent_record["id"],
+        org_id=demo_agent_record["org_id"],
+        name=demo_agent_record["name"],
+        default_policy_set_id=demo_agent_record["default_policy_set_id"],
+    )
+
+    trace_id = uuid.uuid4()
+    messages: list[dict[str, str]] = [
+        {"role": "system", "content": live_demo.SYSTEM_PROMPT},
+        {"role": "user", "content": f"Please process ticket {live_demo.TICKET_ID}."},
+    ]
+    steps: list[LiveDemoStep] = []
+    parent_span_id: UUID | None = None
+    final_text: str | None = None
+
+    for _ in range(live_demo.MAX_TOOL_CALLS):
+        try:
+            decision = await call_llm_with_tools(
+                provider=body.provider,
+                api_key=api_key,
+                messages=messages,
+                tools=live_demo.TOOL_SPECS,
+            )
+        except LLMAuthError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "error": {
+                        "code": "LLM_KEY_INVALID",
+                        "message": f"{body.provider} rejected this key: {exc.message}",
+                        "request_id": request.state.request_id,
+                    }
+                },
+            ) from exc
+        except LLMRateLimitedError as exc:
+            raise HTTPException(
+                status_code=429,
+                detail={
+                    "error": {
+                        "code": "LLM_RATE_LIMITED",
+                        "message": f"{body.provider} rate-limited this key: {exc.message}",
+                        "request_id": request.state.request_id,
+                    }
+                },
+            ) from exc
+        except LLMProviderError as exc:
+            raise HTTPException(
+                status_code=502,
+                detail={
+                    "error": {
+                        "code": "LLM_PROVIDER_ERROR",
+                        "message": f"{body.provider} call failed: {exc.message}",
+                        "request_id": request.state.request_id,
+                    }
+                },
+            ) from exc
+
+        if decision.final_text is not None and decision.tool_call is None:
+            final_text = decision.final_text
+            break
+
+        assert decision.tool_call is not None
+        tool_name = decision.tool_call.tool_name
+        args = decision.tool_call.arguments
+
+        span_id = uuid.uuid4()
+        intercept_body = InterceptRequest(
+            trace_id=trace_id,
+            parent_span_id=parent_span_id,
+            tool_name=tool_name,
+            args=args,
+            agent_id=agent.id,
+        )
+        response = await _decide_and_record(intercept_body, agent, span_id)
+
+        if isinstance(response, InterceptBlockedResponse):
+            steps.append(
+                LiveDemoStep(
+                    tool_name=tool_name, args=args, decision="blocked", reason=response.reason
+                )
+            )
+            messages.append({"role": "assistant", "content": f"(called {tool_name} with {args})"})
+            messages.append({"role": "user", "content": f"BLOCKED by policy: {response.reason}"})
+            continue
+
+        if isinstance(response, InterceptPendingResponse):
+            steps.append(
+                LiveDemoStep(
+                    tool_name=tool_name,
+                    args=args,
+                    decision="pending_approval",
+                    reason="this call requires human approval",
+                )
+            )
+            messages.append({"role": "assistant", "content": f"(called {tool_name} with {args})"})
+            messages.append(
+                {"role": "user", "content": "PENDING APPROVAL: a human must approve this call."}
+            )
+            break
+
+        start = time.monotonic()
+        tool_result = live_demo.execute_fake_tool(tool_name, args)
+        latency_ms = (time.monotonic() - start) * 1000
+        await complete_span(
+            span_id,
+            CompleteSpanRequest(status="completed", latency_ms=latency_ms, result=tool_result),
+            request,
+            agent,
+        )
+        steps.append(
+            LiveDemoStep(tool_name=tool_name, args=args, decision="allowed", result=tool_result)
+        )
+        messages.append({"role": "assistant", "content": f"(called {tool_name} with {args})"})
+        messages.append({"role": "user", "content": f"Tool result: {tool_result}"})
+        parent_span_id = span_id
+
+    if credential_record is not None:
+        await db.touch_llm_credential(credential_record["id"])
+
+    log.info(
+        "live demo run completed", provider=body.provider, trace_id=str(trace_id), steps=len(steps)
+    )
+    return LiveDemoRunResponse(
+        trace_id=trace_id, provider=body.provider, steps=steps, final_text=final_text
+    )
 
 
 def _approval_response(record: Any) -> ApprovalRequestResponse:

@@ -181,6 +181,40 @@ exactly like a JWT — identical RBAC, no separate weaker path.
   doesn't exist, is already revoked, **or belongs to a different user** (even in the same org) — same
   check-before-mutate, no-disclosure-on-cross-owner discipline as everywhere else in this API.
 
+### LLM credentials + live demo (U17, `docs/adr/ADR-022`)
+BYOK: a user-supplied OpenAI/Anthropic/Gemini API key, stored **reversibly encrypted**
+(AES-256-GCM) — a deliberate departure from every other credential in this API (agent keys, API
+tokens), both one-way SHA-256 hashes, because BASTION must hand this one back to the provider in
+plaintext on each call. Personal, not org-shared, same scoping discipline as API tokens above.
+
+- `GET /llm-keys` (any role) — the caller's **own** credentials only. Never includes the key
+  itself or its encrypted form, only `key_last4`.
+- `POST /llm-keys` (any role) — body: `{ "provider": "openai"|"anthropic"|"gemini", "label": "...",
+  "api_key": "..." }` → `LlmCredentialResponse`. The plaintext is encrypted immediately and never
+  stored, logged, or returned past this response — even this response only echoes `key_last4`, not
+  the key.
+- `DELETE /llm-keys/{id}` (any role) — 204 on success. 404 `LLM_CREDENTIAL_NOT_FOUND` if it doesn't
+  exist, is already revoked, or belongs to a different user.
+- `POST /demo/live-run` (any role) — body: `{ "provider": "openai"|"anthropic"|"gemini"|"ollama",
+  "credential_id": "uuid | null" }` (`credential_id` required for a cloud provider, must be omitted
+  for `ollama`). A real LLM reads the same injected support ticket `demo-agent`'s scheduled
+  reliability demo uses a deterministic stand-in for (`docs/ARCHITECTURE.md` §17) and decides which
+  tool to call — every decision still goes through the real `/intercept` policy-engine path, not a
+  separate simulated one. Seeds a per-org demo agent + block-over-$100 policy on first use, so no
+  manual setup is required. Response: `{ "trace_id": "uuid", "provider": "...", "steps": [{
+  "tool_name": "...", "args": {...}, "decision": "allowed"|"blocked"|"pending_approval", "reason":
+  "..."|null, "result": ...|null }], "final_text": "..."|null }`. `trace_id` is a real trace,
+  immediately viewable via `GET /traces/{trace_id}` (replay) like any other.
+
+  Error codes specific to this endpoint: 400 `CREDENTIAL_REQUIRED` (cloud provider, no
+  `credential_id`) / `OLLAMA_TAKES_NO_CREDENTIAL`; 404 `LLM_CREDENTIAL_NOT_FOUND` (missing,
+  cross-user, or provider mismatch); 422 `LLM_KEY_INVALID` (provider rejected the key — 401/403
+  from the provider); 429 `LLM_RATE_LIMITED` (the provider rate-limited or quota-exhausted this
+  key — BASTION relays this rather than raising its own limit, since it's the user's own account
+  budget, not something this system tracks); 502 `LLM_PROVIDER_ERROR` (any other provider failure,
+  including a timeout — local Ollama inference gets a much longer timeout budget than a cloud call,
+  `OLLAMA_TIMEOUT_SECONDS`, since it's genuinely slower with no dedicated serving hardware).
+
 ### Agents & Policies
 - `POST /agents` (role: `owner`/`admin`) — body: `{ "name": "...", "policy_set_id": "uuid | null" }`
   → `AgentResponse` plus a one-time `api_key` field (raw key, `bastion_` prefix; only the SHA-256 hash

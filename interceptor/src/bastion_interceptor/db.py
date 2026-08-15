@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import secrets
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any, cast
@@ -789,6 +790,157 @@ class Database:
             token_id,
             user_id,
         )
+
+    # -- LLM credentials (U17, BYOK — ADR-022) -----------------------------
+
+    async def create_llm_credential(
+        self,
+        *,
+        org_id: UUID,
+        user_id: UUID,
+        provider: str,
+        label: str,
+        key_ciphertext: bytes,
+        key_nonce: bytes,
+        key_last4: str,
+    ) -> asyncpg.Record:
+        record = await self.pool.fetchrow(
+            """
+            INSERT INTO llm_credentials
+                (org_id, user_id, provider, label, key_ciphertext, key_nonce, key_last4)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            RETURNING id, provider, label, key_last4, created_at, last_used_at, revoked_at
+            """,
+            org_id,
+            user_id,
+            provider,
+            label,
+            key_ciphertext,
+            key_nonce,
+            key_last4,
+        )
+        assert record is not None
+        return record
+
+    async def list_llm_credentials_for_user(self, user_id: UUID) -> list[asyncpg.Record]:
+        # Personal, like api_tokens — scoped to the user who pasted it, not
+        # every teammate in the org.
+        return cast(
+            list[asyncpg.Record],
+            await self.pool.fetch(
+                "SELECT id, provider, label, key_last4, created_at, last_used_at, revoked_at "
+                "FROM llm_credentials WHERE user_id = $1 ORDER BY created_at DESC",
+                user_id,
+            ),
+        )
+
+    async def get_active_llm_credential_for_user(
+        self, credential_id: UUID, user_id: UUID
+    ) -> asyncpg.Record | None:
+        """Returns the encrypted columns too — only called from the
+        live-run path, immediately before decrypting for a single provider
+        call. Never exposed on any response model."""
+        return cast(
+            "asyncpg.Record | None",
+            await self.pool.fetchrow(
+                """
+                SELECT id, provider, key_ciphertext, key_nonce
+                FROM llm_credentials
+                WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL
+                """,
+                credential_id,
+                user_id,
+            ),
+        )
+
+    async def touch_llm_credential(self, credential_id: UUID) -> None:
+        await self.pool.execute(
+            "UPDATE llm_credentials SET last_used_at = now() WHERE id = $1", credential_id
+        )
+
+    async def revoke_llm_credential(
+        self, credential_id: UUID, user_id: UUID
+    ) -> asyncpg.Record | None:
+        return await self.pool.fetchrow(
+            """
+            UPDATE llm_credentials SET revoked_at = now()
+            WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL
+            RETURNING id, provider, label, key_last4, created_at, last_used_at, revoked_at
+            """,
+            credential_id,
+            user_id,
+        )
+
+    LIVE_DEMO_AGENT_NAME = "live-demo-agent"
+    LIVE_DEMO_POLICY_NAME = "live-demo-policy"
+    LIVE_DEMO_POLICY_DEFINITION = [
+        {"match": {"tool": "payments.transfer"}, "action": "block", "condition": "amount > 100"},
+        {"match": {"tool": "*"}, "action": "allow"},
+    ]
+
+    async def get_or_create_live_demo_agent(self, org_id: UUID) -> asyncpg.Record:
+        """Idempotent per-org setup for POST /demo/live-run (ADR-022) — lets
+        any org run the live LLM demo with zero manual seeding, the same
+        block-over-$100 policy demo-agent/seed.py hardcodes for one fixed
+        org, created on demand for whichever org actually asks. Never
+        authenticated via API key (this agent's hash is unusable random
+        bytes) — the live-run endpoint constructs its AuthenticatedAgent
+        directly, bypassing the normal /intercept auth dependency.
+
+        Best-effort idempotent, not race-free: no unique constraint on
+        agents(org_id, name), so two concurrent first-time callers in the
+        same org could each insert one — harmless (a spare unused agent
+        row), not worth a schema change for a demo-only path."""
+        existing = await self.pool.fetchrow(
+            "SELECT id, org_id, name, default_policy_set_id FROM agents "
+            "WHERE org_id = $1 AND name = $2",
+            org_id,
+            self.LIVE_DEMO_AGENT_NAME,
+        )
+        if existing is not None:
+            return existing
+
+        async with self.pool.acquire() as conn, conn.transaction():
+            policy_set_id = await conn.fetchval(
+                "SELECT id FROM policy_sets WHERE org_id = $1 AND name = $2",
+                org_id,
+                self.LIVE_DEMO_POLICY_NAME,
+            )
+            if policy_set_id is None:
+                policy_set_id = await conn.fetchval(
+                    "INSERT INTO policy_sets (org_id, name) VALUES ($1, $2) RETURNING id",
+                    org_id,
+                    self.LIVE_DEMO_POLICY_NAME,
+                )
+                await conn.execute(
+                    """
+                    INSERT INTO policies
+                        (org_id, policy_set_id, name, version, definition, active)
+                    VALUES ($1, $2, $3, 1, $4, true)
+                    """,
+                    org_id,
+                    policy_set_id,
+                    self.LIVE_DEMO_POLICY_NAME,
+                    # No json.dumps here — self.pool's connections have a
+                    # jsonb type codec registered (_init_connection above)
+                    # that encodes a raw Python object automatically; unlike
+                    # demo-agent/seed.py's plain asyncpg.connect() (no
+                    # codec), pre-serializing here would double-encode it.
+                    self.LIVE_DEMO_POLICY_DEFINITION,
+                )
+            record = await conn.fetchrow(
+                """
+                INSERT INTO agents (org_id, name, api_key_hash, default_policy_set_id)
+                VALUES ($1, $2, $3, $4)
+                RETURNING id, org_id, name, default_policy_set_id
+                """,
+                org_id,
+                self.LIVE_DEMO_AGENT_NAME,
+                secrets.token_hex(32),
+                policy_set_id,
+            )
+        assert record is not None
+        return record
 
     # -- Idempotency keys (U2, v2 upgrade) -------------------------------
 

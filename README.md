@@ -5,8 +5,11 @@ attempts — an HTTP request, a database mutation, a payment — is intercepted,
 allowed/blocked/escalated, and recorded as an immutable event, giving teams real-time prevention (not
 just after-the-fact logging) and a full causal replay of what an agent actually did.
 
-**Status: v1 (Phases 0-9) plus v2 upgrade phases U1 through U16 all done, and actually running in
-production** — not just pushed to GitHub; see "Deploying this for real" below for what that took. See
+**Status: v1 (Phases 0-9) plus v2 upgrade phases U1 through U17 all done, and actually running in
+production** — not just pushed to GitHub; see "Deploying this for real" below for what that took. U17
+added BYOK LLM credentials (encrypted, `docs/adr/ADR-022`) and a real (non-scripted) live agent demo —
+bring your own OpenAI/Anthropic/Gemini key, or run it against local Ollama for free, from `/account`.
+See
 `docs/PROGRESS.md` for the phase-by-phase build log and every design decision made along the way, or
 `docs/decisions.md` for the same decisions as a scannable index.
 
@@ -559,9 +562,15 @@ documented substitute instead of a silent guess: `docs/adr/ADR-021`.
 - **Team** (`/team`) — see everyone in your org, provision a teammate with a role (a one-time temporary
   password, not an email invite — no email infrastructure exists in this project, and pretending
   otherwise would be worse than not having the feature), change anyone's role.
-- **Account** (`/account`) — your own profile, change your password, and create/revoke personal API
-  tokens (`bstn_pat_...`) for calling this same API from a script or CI job without an interactive
-  login — a third auth credential alongside agent keys and JWT sessions, scoped to you, not your org.
+- **Account** (`/account`) — your own profile, change your password, create/revoke personal API
+  tokens (`bstn_pat_...`), and (v2/U17, `docs/adr/ADR-022`) bring your own OpenAI/Anthropic/Gemini
+  key — encrypted at rest, never returned in plaintext — to run the prompt-injection demo with a
+  *real* LLM deciding which tool to call (the scheduled reliability demo elsewhere uses a
+  deterministic stand-in, deliberately, per `ARCHITECTURE.md` §17); local Ollama works too, no key
+  needed.
+- **Docs** (`/docs`, v2/U17) — in-app quickstart, local dev + Ollama setup, BYOK usage, a condensed
+  real API reference, deployment notes, and an architecture summary — nothing fabricated, every
+  endpoint listed is a real one covered above.
 
 **Deliberately not built, stated explicitly**: a standalone "Incidents" index page and a separate "Audit
 Log" screen (both named in `FRONTEND_V2.md`'s nav sketch) — Incident Replay is reached via Trace Explorer
@@ -651,8 +660,8 @@ runs, and `aggregator/tests/conftest.py` drives the actual outbox → Kafka → 
 
 | Suite | What it proves |
 |---|---|
-| `shared/tests` | Event payloads; the call-state machine (`guard_event` / `state_for_event`) |
-| `interceptor/tests` | Auth + RBAC, the authorization chain, policy engine + reconciliation + hot reload, approval flow, API tokens, agents, users, idempotency, causal ordering, circuit breaker + limits, outbox resumability, object storage, row-level security, retention, health |
+| `shared/tests` | Event payloads; the call-state machine (`guard_event` / `state_for_event`); AES-256-GCM round-trip + fail-closed behavior for BYOK credentials (U17) |
+| `interceptor/tests` | Auth + RBAC, the authorization chain, policy engine + reconciliation + hot reload, approval flow, API tokens, agents, users, idempotency, causal ordering, circuit breaker + limits, outbox resumability, object storage, row-level security (incl. `llm_credentials`, U17), retention, health, LLM credential CRUD + the live-run endpoint's real-policy-block path and structured provider-error mapping (U17) |
 | `aggregator/tests` | Kafka resumability (manual offset commit), WS fan-out + per-span delta coalescing, replay, the observability milestone (Jaeger REST query), health, U16's 5 analytics endpoints + trace filters against real policy-generated events |
 | `aggregator/tests/chaos` | Real-infra outage drills against the docker-compose stack only (`docker stop`/`start` on `bastion-kafka`, `bastion-redis`, …) — deliberately **not** run in CI |
 | `sdk-python/tests` | `/intercept` semantics end to end through `httpx.ASGITransport` |

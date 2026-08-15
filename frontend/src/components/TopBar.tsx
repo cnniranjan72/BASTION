@@ -10,6 +10,7 @@ import {
   AnalyticsIcon,
   ApprovalsIcon,
   CostIcon,
+  DocsIcon,
   GraphIcon,
   HealthIcon,
   OverviewIcon,
@@ -64,7 +65,10 @@ const NAV_GROUPS: Array<{
   },
   {
     label: "Admin",
-    links: [{ to: "/team", label: "Team", icon: TeamIcon }],
+    links: [
+      { to: "/team", label: "Team", icon: TeamIcon },
+      { to: "/docs", label: "Docs", icon: DocsIcon },
+    ],
   },
 ];
 

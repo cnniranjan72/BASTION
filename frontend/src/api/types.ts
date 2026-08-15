@@ -41,6 +41,36 @@ export interface CreateApiTokenResponse extends ApiToken {
   token: string;
 }
 
+// U17 (BYOK — `docs/adr/ADR-022`). key_ciphertext/key_nonce are never sent
+// to the frontend at all — only key_last4, same shape as ApiToken's
+// token_prefix-not-token_hash pattern above.
+export type LlmProvider = "openai" | "anthropic" | "gemini";
+
+export interface LlmCredential {
+  id: string;
+  provider: LlmProvider;
+  label: string;
+  key_last4: string;
+  created_at: string;
+  last_used_at: string | null;
+  revoked_at: string | null;
+}
+
+export interface LiveDemoStep {
+  tool_name: string;
+  args: Record<string, unknown>;
+  decision: "allowed" | "blocked" | "pending_approval";
+  reason: string | null;
+  result: unknown;
+}
+
+export interface LiveDemoRunResponse {
+  trace_id: string;
+  provider: LlmProvider | "ollama";
+  steps: LiveDemoStep[];
+  final_text: string | null;
+}
+
 export type NodeStatus =
   "pending" | "allowed" | "blocked" | "pending_approval" | "completed" | "failed";
 

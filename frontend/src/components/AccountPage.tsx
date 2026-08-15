@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
+import { Link } from "react-router-dom";
 import { api, ApiError } from "../api/client";
 import { useAuthStore } from "../store/auth";
 import { toast } from "../store/toast";
@@ -7,7 +8,9 @@ import { EmptyState } from "./EmptyState";
 import { KeyIcon } from "./icons";
 import { TableSkeleton } from "./TableSkeleton";
 import { TopBar } from "./TopBar";
-import type { ApiToken, TeamMember } from "../api/types";
+import type { ApiToken, LiveDemoRunResponse, LlmCredential, LlmProvider, TeamMember } from "../api/types";
+
+const LLM_PROVIDERS: LlmProvider[] = ["openai", "anthropic", "gemini"];
 
 export function AccountPage() {
   const { role, orgId, userId } = useAuthStore();
@@ -27,6 +30,20 @@ export function AccountPage() {
   const [copied, setCopied] = useState(false);
   const [revoking, setRevoking] = useState<string | null>(null);
 
+  const [llmCredentials, setLlmCredentials] = useState<LlmCredential[]>([]);
+  const [llmCredentialsLoading, setLlmCredentialsLoading] = useState(true);
+  const [llmProvider, setLlmProvider] = useState<LlmProvider>("openai");
+  const [llmLabel, setLlmLabel] = useState("");
+  const [llmApiKey, setLlmApiKey] = useState("");
+  const [creatingLlmCredential, setCreatingLlmCredential] = useState(false);
+  const [revokingLlmCredential, setRevokingLlmCredential] = useState<string | null>(null);
+
+  const [demoProvider, setDemoProvider] = useState<LlmProvider | "ollama">("ollama");
+  const [demoCredentialId, setDemoCredentialId] = useState<string>("");
+  const [runningDemo, setRunningDemo] = useState(false);
+  const [demoResult, setDemoResult] = useState<LiveDemoRunResponse | null>(null);
+  const [demoError, setDemoError] = useState<string | null>(null);
+
   useEffect(() => {
     // No GET /users/me endpoint exists — the org member list already has
     // this user's row, and reusing it avoids adding a redundant endpoint.
@@ -37,6 +54,7 @@ export function AccountPage() {
         // Non-fatal — the page still works without the profile card.
       });
     loadTokens();
+    loadLlmCredentials();
   }, [userId]);
 
   async function loadTokens() {
@@ -109,7 +127,68 @@ export function AccountPage() {
     setCopied(true);
   }
 
+  async function loadLlmCredentials() {
+    setLlmCredentialsLoading(true);
+    try {
+      setLlmCredentials(await api.listLlmCredentials());
+    } catch {
+      // Non-fatal for the rest of the page.
+    } finally {
+      setLlmCredentialsLoading(false);
+    }
+  }
+
+  async function handleCreateLlmCredential(event: FormEvent) {
+    event.preventDefault();
+    setCreatingLlmCredential(true);
+    try {
+      await api.createLlmCredential(llmProvider, llmLabel, llmApiKey);
+      setLlmLabel("");
+      setLlmApiKey("");
+      toast.success(`${llmProvider} key added`);
+      await loadLlmCredentials();
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "Failed to add key");
+    } finally {
+      setCreatingLlmCredential(false);
+    }
+  }
+
+  async function handleRevokeLlmCredential(id: string) {
+    setRevokingLlmCredential(id);
+    try {
+      await api.revokeLlmCredential(id);
+      toast.success("Key revoked");
+      await loadLlmCredentials();
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "Failed to revoke key");
+    } finally {
+      setRevokingLlmCredential(null);
+    }
+  }
+
+  async function handleRunLiveDemo() {
+    setRunningDemo(true);
+    setDemoError(null);
+    setDemoResult(null);
+    try {
+      const result = await api.runLiveDemo(
+        demoProvider,
+        demoProvider === "ollama" ? null : demoCredentialId || null,
+      );
+      setDemoResult(result);
+    } catch (err) {
+      setDemoError(err instanceof ApiError ? err.message : "Failed to run live demo");
+    } finally {
+      setRunningDemo(false);
+    }
+  }
+
   const activeTokens = tokens.filter((t) => !t.revoked_at);
+  const activeLlmCredentials = llmCredentials.filter((c) => !c.revoked_at);
+  const credentialsForDemoProvider = activeLlmCredentials.filter(
+    (c) => c.provider === demoProvider,
+  );
 
   return (
     <div className="dashboard">
@@ -245,6 +324,157 @@ export function AccountPage() {
                   ))}
                 </tbody>
               </table>
+            </div>
+          )}
+        </section>
+
+        <section className="account-section">
+          <h2>LLM provider keys</h2>
+          <p className="page__subtitle">
+            Bring your own OpenAI, Anthropic, or Gemini key to run the live prompt-injection demo
+            below with a real model — the key is encrypted at rest and only decrypted for that one
+            call. Prefer not to share a key? Use local Ollama instead, no key needed.
+          </p>
+
+          <form className="inline-form" onSubmit={handleCreateLlmCredential}>
+            <select value={llmProvider} onChange={(e) => setLlmProvider(e.target.value as LlmProvider)}>
+              {LLM_PROVIDERS.map((p) => (
+                <option key={p} value={p}>
+                  {p}
+                </option>
+              ))}
+            </select>
+            <input
+              placeholder="Label, e.g. 'personal key'"
+              value={llmLabel}
+              onChange={(e) => setLlmLabel(e.target.value)}
+              required
+            />
+            <input
+              type="password"
+              placeholder="API key"
+              value={llmApiKey}
+              onChange={(e) => setLlmApiKey(e.target.value)}
+              required
+            />
+            <button type="submit" disabled={creatingLlmCredential}>
+              {creatingLlmCredential ? "Adding…" : "Add key"}
+            </button>
+          </form>
+
+          {llmCredentialsLoading ? (
+            <TableSkeleton />
+          ) : activeLlmCredentials.length === 0 ? (
+            <EmptyState icon={KeyIcon} title="No LLM keys yet">
+              Add one above, or skip this and run the demo with local Ollama.
+            </EmptyState>
+          ) : (
+            <div className="table-scroll">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Provider</th>
+                    <th>Label</th>
+                    <th>Key</th>
+                    <th>Created</th>
+                    <th>Last used</th>
+                    <th />
+                  </tr>
+                </thead>
+                <tbody>
+                  {activeLlmCredentials.map((c) => (
+                    <tr key={c.id}>
+                      <td>{c.provider}</td>
+                      <td>{c.label}</td>
+                      <td className="data-table__mono">…{c.key_last4}</td>
+                      <td>{new Date(c.created_at).toLocaleDateString()}</td>
+                      <td>{c.last_used_at ? new Date(c.last_used_at).toLocaleString() : "Never"}</td>
+                      <td>
+                        <button
+                          onClick={() => handleRevokeLlmCredential(c.id)}
+                          disabled={revokingLlmCredential === c.id}
+                        >
+                          {revokingLlmCredential === c.id ? "Revoking…" : "Revoke"}
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+
+        <section className="account-section">
+          <h2>Run the live prompt-injection demo</h2>
+          <p className="page__subtitle">
+            A real LLM reads a support ticket containing an injected instruction and decides which
+            tool to call — every decision it makes still goes through BASTION's real policy engine.
+            (The scheduled reliability demo elsewhere in this system uses a scripted stand-in
+            instead, deliberately, so it isn't flaky — see ARCHITECTURE.md §17. This one is real.)
+          </p>
+
+          <div className="inline-form">
+            <select
+              value={demoProvider}
+              onChange={(e) => {
+                setDemoProvider(e.target.value as LlmProvider | "ollama");
+                setDemoCredentialId("");
+              }}
+            >
+              <option value="ollama">ollama (local)</option>
+              {LLM_PROVIDERS.map((p) => (
+                <option key={p} value={p}>
+                  {p}
+                </option>
+              ))}
+            </select>
+            {demoProvider !== "ollama" && (
+              <select
+                value={demoCredentialId}
+                onChange={(e) => setDemoCredentialId(e.target.value)}
+                required
+              >
+                <option value="" disabled>
+                  Choose a {demoProvider} key…
+                </option>
+                {credentialsForDemoProvider.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.label} (…{c.key_last4})
+                  </option>
+                ))}
+              </select>
+            )}
+            <button
+              onClick={handleRunLiveDemo}
+              disabled={
+                runningDemo || (demoProvider !== "ollama" && credentialsForDemoProvider.length === 0)
+              }
+            >
+              {runningDemo ? "Running…" : "Run live demo"}
+            </button>
+          </div>
+
+          {demoProvider !== "ollama" && credentialsForDemoProvider.length === 0 && (
+            <p className="page__subtitle">Add a {demoProvider} key above first.</p>
+          )}
+
+          {demoError && <p className="page__error">{demoError}</p>}
+
+          {demoResult && (
+            <div className="key-reveal">
+              <ol>
+                {demoResult.steps.map((step, i) => (
+                  <li key={i}>
+                    <code>{step.tool_name}</code>
+                    {" — "}
+                    <strong>{step.decision}</strong>
+                    {step.reason && <> ({step.reason})</>}
+                  </li>
+                ))}
+              </ol>
+              {demoResult.final_text && <p>{demoResult.final_text}</p>}
+              <Link to={`/replay/${demoResult.trace_id}`}>View this trace in Incident Replay →</Link>
             </div>
           )}
         </section>
