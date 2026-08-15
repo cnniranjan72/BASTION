@@ -3,7 +3,13 @@ name = "bastion-sdk"
 version = "0.0.0"
 description = "BASTION client SDK — wraps agent tool calls and routes them through the interceptor. ARCHITECTURE.md §2.1."
 requires-python = ">=3.11"
-dependencies = ["bastion-shared", "httpx>=0.27", "pydantic>=2.9"]
+dependencies = [
+  "bastion-shared",
+  "httpx>=0.27",
+  "pydantic>=2.9",
+  "opentelemetry-api>=1.27",
+  "opentelemetry-instrumentation-httpx>=0.48b0",
+]
 
 [project.optional-dependencies]
 dev = ["pytest>=8.3", "pytest-asyncio>=0.24"]

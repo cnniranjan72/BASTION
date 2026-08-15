@@ -1,0 +1,94 @@
+{
+  "title": "BASTION Overview",
+  "uid": "bastion-overview",
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "time": { "from": "now-1h", "to": "now" },
+  "refresh": "10s",
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Intercept latency (p50/p95/p99)",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.5, sum(rate(intercept_latency_seconds_bucket[5m])) by (le))",
+          "legendFormat": "p50"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(intercept_latency_seconds_bucket[5m])) by (le))",
+          "legendFormat": "p95"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(intercept_latency_seconds_bucket[5m])) by (le))",
+          "legendFormat": "p99"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "RED: request rate by service/status",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum(rate(interceptor_http_requests_total[5m])) by (status_code)",
+          "legendFormat": "interceptor {{status_code}}"
+        },
+        {
+          "expr": "sum(rate(aggregator_http_requests_total[5m])) by (status_code)",
+          "legendFormat": "aggregator {{status_code}}"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Policy decisions by outcome",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "targets": [
+        { "expr": "sum(rate(policy_decisions_total[5m])) by (decision)", "legendFormat": "{{decision}}" }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "USE: DB pool utilization",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "targets": [
+        { "expr": "interceptor_db_pool_in_use", "legendFormat": "interceptor in-use" },
+        { "expr": "interceptor_db_pool_size", "legendFormat": "interceptor size" },
+        { "expr": "aggregator_db_pool_in_use", "legendFormat": "aggregator in-use" },
+        { "expr": "aggregator_db_pool_size", "legendFormat": "aggregator size" }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "USE: outbox backlog (unpublished events)",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "targets": [
+        { "expr": "bastion_outbox_unpublished_total", "legendFormat": "unpublished" }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Business: active traces + live WS connections",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "targets": [
+        { "expr": "bastion_active_traces", "legendFormat": "active traces" },
+        { "expr": "bastion_live_ws_connections", "legendFormat": "live WS connections" }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "stat",
+      "title": "Business: cumulative call cost ($)",
+      "gridPos": { "h": 6, "w": 8, "x": 0, "y": 24 },
+      "targets": [{ "expr": "bastion_call_cost_dollars_total" }]
+    }
+  ]
+}

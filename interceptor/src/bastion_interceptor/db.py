@@ -9,7 +9,7 @@ from uuid import UUID
 import asyncpg
 from bastion_shared import EventType
 
-from . import object_storage
+from . import object_storage, tracing
 from .config import config
 
 
@@ -184,8 +184,17 @@ class Database:
         same small pointer object, never the large payload itself. This
         keeps `events`/`outbox_events` rows bounded in size regardless of
         how large a tool's actual response was.
+
+        U12 (v2 upgrade): also captures the currently-active OTel trace
+        context (tracing.capture_trace_context, present only inside a real
+        request — a no-op empty dict otherwise, e.g. in a test/script
+        context with no tracer configured) onto the outbox row, for the
+        outbox publisher to later turn into Kafka headers — see
+        tracing.py's module docstring for why this can't just be injected
+        directly at publish time.
         """
         payload = await object_storage.upload_if_large(payload)
+        otel_trace_context = tracing.capture_trace_context()
         events_query = """
             INSERT INTO events
                 (trace_id, span_id, parent_span_id, agent_id, event_type, payload, sequence_number)
@@ -195,8 +204,9 @@ class Database:
         """
         outbox_query = """
             INSERT INTO outbox_events
-                (event_id, trace_id, span_id, parent_span_id, agent_id, event_type, payload)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
+                (event_id, trace_id, span_id, parent_span_id, agent_id, event_type, payload,
+                 otel_trace_context)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
         """
         args = (trace_id, span_id, parent_span_id, agent_id, event_type.value, payload)
 
@@ -211,6 +221,7 @@ class Database:
                 agent_id,
                 event_type.value,
                 payload,
+                otel_trace_context,
             )
 
         if conn is not None:

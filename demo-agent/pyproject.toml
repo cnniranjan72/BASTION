@@ -3,7 +3,13 @@ name = "bastion-demo-agent"
 version = "0.0.0"
 description = "Reference demo agent + prompt-injection scenario (BUILD_PLAN.md Phase 8)."
 requires-python = ">=3.11"
-dependencies = ["bastion-sdk", "asyncpg>=0.29", "redis>=5.0"]
+dependencies = [
+  "bastion-sdk",
+  "asyncpg>=0.29",
+  "redis>=5.0",
+  "opentelemetry-sdk>=1.27",
+  "opentelemetry-exporter-otlp-proto-http>=1.27",
+]
 
 [project.optional-dependencies]
 dev = ["pytest>=8.3", "pytest-asyncio>=0.24", "bastion-interceptor"]

@@ -781,7 +781,7 @@ Target architecture: `UPGRADE_ARCHITECTURE.md`. Target frontend: `FRONTEND_V2.md
 file before starting (migrations 0001–0006 present, 67 tests passing, live on Render, aggregator
 confirmed still on Postgres LISTEN/NOTIFY per v1 design) — no mismatch found.
 
-**Current phase**: U1–U11 complete (U10 as a deferral decision, not infrastructure), U12 next.
+**Current phase**: U1–U12 complete (U10 as a deferral decision, not infrastructure), U13 next.
 
 ### Phase status
 - **U1 — Explicit state machine: done.** `shared/src/bastion_shared/call_state.py` — `CallState` enum
@@ -1087,7 +1087,47 @@ confirmed still on Postgres LISTEN/NOTIFY per v1 design) — no mismatch found.
   node deliver as far fewer than 200 messages, correct final state, propagation latency bounded by
   the coalescing window rather than growing with burst size) — both passed after the coalescing fix
   above. Full workspace suite: 209 passed. ADR-008 written.
-- U12–U16: not started.
+- **U12 — Observability: done.** OpenTelemetry across the full backend chain (Agent SDK → Interceptor
+  → Policy evaluation → Postgres → Kafka → Aggregator), Jaeger as the trace backend
+  (`jaegertracing/all-in-one`, OTLP/HTTP direct ingestion, no separate Collector needed), Prometheus +
+  Grafana for metrics (new `infra/prometheus/prometheus.yml`, `infra/grafana/`, a real dashboard
+  checked in as `infra/grafana/dashboards/bastion-overview.json` and verified provisioned via
+  Grafana's own API, not just checked in and assumed correct). **Naming, per
+  UPGRADE_ARCHITECTURE.md §14's explicit warning** (ADR-019): the OTel trace's own W3C trace ID is
+  never conflated with this system's `trace_id` column — correlation is a `bastion.trace_id` span
+  attribute, one-directional, never a substitution. **The genuinely hard part** (§14's own framing):
+  Kafka has no built-in equivalent of HTTP's automatic W3C traceparent propagation. Solved by
+  capturing the active span's context at `insert_event` time (the only point it's actually still
+  live — the outbox publisher's background polling loop runs long after the original request's span
+  has ended) into a new `outbox_events.otel_trace_context` column (migration `0013`), read back and
+  attached as Kafka headers at publish time, extracted by the aggregator's consumer to make
+  `kafka.consume` a real child span of the original producer's trace — proven directly, not assumed,
+  by the milestone test fetching the actual trace from Jaeger's REST API and asserting the parent
+  reference exists. RED metrics (`{service}_http_requests_total`/`_duration_seconds`, all endpoints,
+  via each service's request middleware — route *template*, not resolved path with a real UUID in
+  it, to avoid unbounded cardinality) and USE metrics (DB pool utilization for both services, outbox
+  backlog depth) and business metrics (`policy_decisions_total`, cumulative call cost, active traces,
+  live WS connections) — the RED metric names were originally identical between the two services and
+  collided in `prometheus_client`'s process-wide global registry the moment this repo's own
+  cross-service tests imported both packages into one process (never happens in production, separate
+  processes there) — caught by the test suite itself failing at import time, fixed by prefixing each
+  service's metric names. Milestone test
+  (`aggregator/tests/test_observability.py::test_real_request_trace_is_fully_visible_in_jaeger_with_correct_hops`):
+  a real request, root span started manually for a deterministic trace ID, fetched back from Jaeger's
+  REST API, asserts the `/intercept` server span, the manual `policy.evaluate` span, and
+  `kafka.consume` all exist with real non-negative durations and correct parent references — passed
+  on first run. CI gets a Jaeger service too (a plain `services:` entry works fine for it, unlike
+  MinIO — no command override needed). Full workspace suite: 210 passed (one already-documented
+  Windows-specific connection-reset flake recurred under full-suite load, confirmed absent in
+  isolation — not a U12 regression, the same class of environmental issue noted in U3/U5/U6's
+  entries above). ADR-019 written (unlisted — U12 doesn't name a required ADR in the build plan, but
+  the naming/propagation decisions were non-obvious enough to record, same reasoning as ADR-017/018).
+
+  **Scope, stated explicitly**: browser-side OTel instrumentation ("→ WebSocket → Browser" in §14's
+  full chain) is deferred to U15, since Frontend v2 doesn't exist yet to instrument. Load-test-scale
+  tracing overhead (does OTel's own cost matter at 5K RPS) is U13's question to answer, not this
+  phase's.
+- U13–U16: not started.
 
 ### ADR checklist (mirrors `ADR_INDEX.md`)
 - [x] ADR-001: PostgreSQL as source of truth — `docs/adr/ADR-001-...md`.

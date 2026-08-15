@@ -22,7 +22,9 @@ from typing import Any
 import structlog
 from aiokafka import AIOKafkaConsumer
 from bastion_shared import TOOL_EVENTS_TOPIC
+from opentelemetry import trace as otel_trace
 
+from . import tracing
 from .config import config
 
 log = structlog.get_logger()
@@ -52,8 +54,20 @@ class KafkaEventConsumer:
     async def _consume(self, on_notification: NotificationHandler) -> None:
         assert self._consumer is not None
         async for message in self._consumer:
+            # U12 (v2 upgrade): continues the *same* OTel trace the
+            # original producer (interceptor's outbox publisher) started —
+            # see tracing.py's module docstring. message.headers is
+            # whatever kafka_headers_from_context attached (empty if the
+            # row predates U12 or tracing was disabled), in which case
+            # extract() returns an empty context and this span simply
+            # starts its own new trace instead of continuing one — a safe
+            # degrade, not an error.
+            parent_context = tracing.extract_context_from_kafka_headers(message.headers or [])
             try:
-                await on_notification(message.value)
+                with tracing.get_tracer().start_as_current_span(
+                    "kafka.consume", context=parent_context, kind=otel_trace.SpanKind.CONSUMER
+                ):
+                    await on_notification(message.value)
             except Exception:
                 log.exception(
                     "kafka consumer failed to process message",

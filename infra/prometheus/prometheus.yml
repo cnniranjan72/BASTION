@@ -1,0 +1,20 @@
+# U12 (v2 upgrade), UPGRADE_ARCHITECTURE.md §14: scrapes both services'
+# existing /metrics endpoints (Prometheus text-exposition format, already
+# built in Phase 9 — RED/USE/business metrics added in U12, see
+# interceptor/metrics.py and aggregator/metrics.py).
+#
+# `host.docker.internal` — this compose stack's app services normally run
+# containerized (docker-compose.yml's interceptor/aggregator services), but
+# during local dev they're just as often run natively via `uv run` outside
+# Docker entirely; either way, targeting the host's published ports lets
+# this scrape config work unmodified for both.
+global:
+  scrape_interval: 5s
+
+scrape_configs:
+  - job_name: bastion-interceptor
+    static_configs:
+      - targets: ['host.docker.internal:4001']
+  - job_name: bastion-aggregator
+    static_configs:
+      - targets: ['host.docker.internal:4002']

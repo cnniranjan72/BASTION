@@ -29,6 +29,7 @@ import structlog
 from aiokafka import AIOKafkaProducer
 from bastion_shared import TOOL_EVENTS_TOPIC
 
+from . import tracing
 from .config import config
 from .db import db
 
@@ -76,8 +77,9 @@ class OutboxPublisher:
             # execution land in the same partition and are ordered relative
             # to each other; no ordering guarantee across different
             # trace_ids is made or implied.
+            headers = tracing.kafka_headers_from_context(row["otel_trace_context"])
             await self._producer.send_and_wait(
-                TOOL_EVENTS_TOPIC, key=str(row["trace_id"]), value=message
+                TOOL_EVENTS_TOPIC, key=str(row["trace_id"]), value=message, headers=headers
             )
             published_ids.append(row["id"])
 

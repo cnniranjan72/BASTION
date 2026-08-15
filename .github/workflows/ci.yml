@@ -56,6 +56,22 @@ jobs:
           --health-interval 10s
           --health-timeout 10s
           --health-retries 15
+      # U12 (v2 upgrade): the observability milestone test
+      # (aggregator/tests/test_observability.py) queries this directly via
+      # its REST API. Unlike MinIO, Jaeger's default entrypoint needs no
+      # command override, so it works fine as a plain services: entry.
+      # Standard ports here (no local-dev-style remap needed) — a fresh CI
+      # runner has no pre-existing Jaeger container to collide with.
+      jaeger:
+        image: jaegertracing/all-in-one:latest
+        env:
+          COLLECTOR_OTLP_ENABLED: 'true'
+        ports: ['16686:16686', '4318:4318']
+        options: >-
+          --health-cmd "wget -q -O- http://localhost:16686/ || exit 1"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     env:
       DATABASE_URL: postgresql://bastion:bastion@localhost:5432/bastion
       # U8 (v2 upgrade): the restricted, non-superuser role Row-Level
@@ -71,6 +87,11 @@ jobs:
       OBJECT_STORAGE_ACCESS_KEY: bastion
       OBJECT_STORAGE_SECRET_KEY: bastion123
       OBJECT_STORAGE_BUCKET: bastion-payloads
+      # U12 (v2 upgrade): standard port here, matching the jaeger service
+      # above — see its comment for why this differs from local dev's
+      # remapped 4319.
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://localhost:4318
+      JAEGER_QUERY_URL: http://localhost:16686
     steps:
       - uses: actions/checkout@v4
       - name: Install uv

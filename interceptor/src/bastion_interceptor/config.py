@@ -56,6 +56,9 @@ class Config:
     object_storage_access_key: str
     object_storage_secret_key: str
     object_storage_bucket: str
+    # U12 (v2 upgrade): OTLP/HTTP endpoint traces are exported to — Jaeger's
+    # all-in-one container accepts this directly, no separate Collector.
+    otel_exporter_otlp_endpoint: str
 
 
 def load_config() -> Config:
@@ -92,6 +95,9 @@ def load_config() -> Config:
         object_storage_access_key=os.environ.get("OBJECT_STORAGE_ACCESS_KEY", "bastion"),
         object_storage_secret_key=os.environ.get("OBJECT_STORAGE_SECRET_KEY", "bastion123"),
         object_storage_bucket=os.environ.get("OBJECT_STORAGE_BUCKET", "bastion-payloads"),
+        otel_exporter_otlp_endpoint=os.environ.get(
+            "OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4319"
+        ),
     )
 
 

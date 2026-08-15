@@ -60,12 +60,21 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
+from . import tracing
 from .config import config
 from .db import db
 from .graph import STATUS_FOR_EVENT_TYPE, fold_events_to_graph
 from .human_auth import AuthenticatedUser, authenticate_user, decode_bearer_token
 from .kafka_consumer import KafkaEventConsumer
 from .logging import configure_logging, log
+from .metrics import (
+    bastion_active_traces,
+    bastion_live_ws_connections,
+    db_pool_in_use,
+    db_pool_size,
+    http_request_duration_seconds,
+    http_requests_total,
+)
 from .redis_bus import redis_bus
 from .ws import manager as ws_manager
 
@@ -179,6 +188,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title="bastion-aggregator", version="0.0.0", lifespan=lifespan)
+tracing.configure_tracing(app, service_name="bastion-aggregator")
 
 
 def _error_body(request: Request, code: str, message: str) -> dict[str, Any]:
@@ -228,14 +238,25 @@ async def request_id_middleware(
         response = await call_next(request)
         return response
     finally:
-        elapsed_ms = (time.perf_counter() - start) * 1000
+        elapsed_seconds = time.perf_counter() - start
+        status_code = response.status_code if response is not None else 500
         log.info(
             "request completed",
-            status_code=response.status_code if response is not None else 500,
-            elapsed_ms=round(elapsed_ms, 2),
+            status_code=status_code,
+            elapsed_ms=round(elapsed_seconds * 1000, 2),
         )
         if response is not None:
             response.headers["X-Request-Id"] = request_id
+        # U12 (v2 upgrade), RED metrics — same route-template-not-raw-path
+        # reasoning as interceptor/main.py's identical middleware.
+        route = request.scope.get("route")
+        path_label = route.path if route is not None else request.url.path
+        http_requests_total.labels(
+            method=request.method, path=path_label, status_code=str(status_code)
+        ).inc()
+        http_request_duration_seconds.labels(method=request.method, path=path_label).observe(
+            elapsed_seconds
+        )
         structlog.contextvars.clear_contextvars()
 
 
@@ -246,6 +267,10 @@ async def healthz() -> dict[str, str]:
 
 @app.get("/metrics", include_in_schema=False)
 async def metrics() -> Response:
+    db_pool_size.set(db.pool.get_size())
+    db_pool_in_use.set(db.pool.get_size() - db.pool.get_idle_size())
+    bastion_active_traces.set(len(active_traces))
+    bastion_live_ws_connections.set(ws_manager.connection_count())
     return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 

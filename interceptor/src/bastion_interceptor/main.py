@@ -86,9 +86,10 @@ from bastion_shared import (
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
+from opentelemetry import trace as otel_trace
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
-from . import authorization, circuit_breaker, object_storage
+from . import authorization, circuit_breaker, object_storage, tracing
 from . import limits as limits_engine
 from . import policy as policy_engine
 from .auth import AuthenticatedAgent, authenticate_agent, hash_api_key
@@ -103,7 +104,16 @@ from .human_auth import (
     verify_password,
 )
 from .logging import configure_logging, log
-from .metrics import intercept_latency_seconds, policy_decisions_total
+from .metrics import (
+    bastion_call_cost_dollars_total,
+    bastion_outbox_unpublished_total,
+    db_pool_in_use,
+    db_pool_size,
+    http_request_duration_seconds,
+    http_requests_total,
+    intercept_latency_seconds,
+    policy_decisions_total,
+)
 from .policy_reconciler import PolicyReconciler
 from .redis_bus import redis_bus
 
@@ -190,6 +200,12 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title="bastion-interceptor", version="0.0.0", lifespan=lifespan)
+# U12 (v2 upgrade): auto-instruments every request as a server span, with
+# incoming W3C traceparent headers (from the SDK's own httpx
+# instrumentation) automatically continuing the same OTel trace rather
+# than starting a new one — see tracing.py's module docstring for why
+# this is a *different* trace concept from this app's own `trace_id`.
+tracing.configure_tracing(app, service_name="bastion-interceptor")
 
 
 def _error_body(request: Request, code: str, message: str) -> dict[str, Any]:
@@ -240,14 +256,28 @@ async def request_id_middleware(
         response = await call_next(request)
         return response
     finally:
-        elapsed_ms = (time.perf_counter() - start) * 1000
+        elapsed_seconds = time.perf_counter() - start
+        status_code = response.status_code if response is not None else 500
         log.info(
             "request completed",
-            status_code=response.status_code if response is not None else 500,
-            elapsed_ms=round(elapsed_ms, 2),
+            status_code=status_code,
+            elapsed_ms=round(elapsed_seconds * 1000, 2),
         )
         if response is not None:
             response.headers["X-Request-Id"] = request_id
+        # U12 (v2 upgrade), RED metrics: the *route template*
+        # ("/spans/{span_id}/complete"), not the resolved path with a real
+        # UUID in it — using the raw path would give every single request
+        # its own unbounded-cardinality label value, which is exactly the
+        # mistake that makes a Prometheus deployment fall over in practice.
+        route = request.scope.get("route")
+        path_label = route.path if route is not None else request.url.path
+        http_requests_total.labels(
+            method=request.method, path=path_label, status_code=str(status_code)
+        ).inc()
+        http_request_duration_seconds.labels(method=request.method, path=path_label).observe(
+            elapsed_seconds
+        )
         structlog.contextvars.clear_contextvars()
 
 
@@ -258,6 +288,18 @@ async def healthz() -> dict[str, str]:
 
 @app.get("/metrics", include_in_schema=False)
 async def metrics() -> Response:
+    # U12 (v2 upgrade), USE metrics: sampled on scrape rather than kept
+    # continuously up to date — cheap (pool introspection is in-memory,
+    # the outbox count is one indexed query against the same partial index
+    # the publisher's own poll already uses) and simpler than wiring a
+    # background sampler for numbers that are only ever consumed via
+    # scraping anyway.
+    db_pool_size.set(db.pool.get_size())
+    db_pool_in_use.set(db.pool.get_size() - db.pool.get_idle_size())
+    unpublished = await db.pool.fetchval(
+        "SELECT count(*) FROM outbox_events WHERE published_at IS NULL"
+    )
+    bastion_outbox_unpublished_total.set(unpublished)
     return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
@@ -558,9 +600,22 @@ async def _decide_and_record(
         payload=CallAttemptedPayload(tool_name=body.tool_name, args=body.args).model_dump(),
     )
 
-    compiled_policy = policy_engine.policy_cache.get(agent.default_policy_set_id)
-    decision = policy_engine.evaluate(compiled_policy, body.tool_name, body.args)
-    policy_id = compiled_policy.policy_id if compiled_policy is not None else None
+    # U12 (v2 upgrade): bastion.trace_id is this system's own agent-
+    # execution trace_id, set as an *attribute* on the OTel request span
+    # FastAPI auto-instrumentation already created — never the OTel trace's
+    # own ID (see tracing.py's module docstring). A human debugging one
+    # Bastion trace_id finds its OTel trace by searching Jaeger for this
+    # attribute, without the two ID concepts ever being conflated.
+    current_span = otel_trace.get_current_span()
+    current_span.set_attribute("bastion.trace_id", str(body.trace_id))
+    current_span.set_attribute("bastion.agent_id", str(agent.id))
+    current_span.set_attribute("bastion.tool_name", body.tool_name)
+
+    with tracing.get_tracer().start_as_current_span("policy.evaluate") as policy_span:
+        compiled_policy = policy_engine.policy_cache.get(agent.default_policy_set_id)
+        decision = policy_engine.evaluate(compiled_policy, body.tool_name, body.args)
+        policy_id = compiled_policy.policy_id if compiled_policy is not None else None
+        policy_span.set_attribute("bastion.decision", decision.action)
 
     # U6 (v2 upgrade): both checks only apply once policy evaluation has
     # already decided this call would otherwise be allowed — a block or
@@ -723,6 +778,13 @@ async def complete_span(
             latency_ms=body.latency_ms, cost=body.cost, result=body.result, error=body.error
         ).model_dump(),
     )
+    # U12 (v2 upgrade), business metric: the SDK doesn't populate `cost`
+    # today (documented already in docs/adr/ADR-015's survey) — this
+    # increments by 0 in practice until something does, which is correct,
+    # not dead code: the metric exists and is wired end to end, ready for
+    # whenever a caller starts reporting real cost.
+    if body.cost is not None:
+        bastion_call_cost_dollars_total.inc(body.cost)
 
     # U6 (v2 upgrade): this is the only place the interceptor ever learns
     # whether a call actually succeeded or failed — it never makes the real

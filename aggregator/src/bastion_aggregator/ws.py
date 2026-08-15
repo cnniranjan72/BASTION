@@ -85,6 +85,11 @@ class ConnectionManager:
             if task is not None:
                 task.cancel()
 
+    def connection_count(self) -> int:
+        """U12 (v2 upgrade): total WS clients connected on this instance,
+        across every agent_id — main.py's /metrics samples this."""
+        return sum(len(conns) for conns in self._connections.values())
+
     async def broadcast(self, agent_id: UUID, message: LiveMessage) -> None:
         """Called by main.py's _handle_notification — publishes only.
         Local delivery, on this instance or any other, always happens via

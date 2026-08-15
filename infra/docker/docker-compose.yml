@@ -103,6 +103,59 @@ services:
       timeout: 5s
       retries: 10
 
+  jaeger:
+    # U12, v2 upgrade — UPGRADE_ARCHITECTURE.md §14's OTel trace, distinct
+    # from the agent-execution trace_id in DATA_MODEL.md (see docs/adr/ADR-019
+    # / tracing.py's module docstring for how the two are correlated without
+    # colliding). all-in-one accepts OTLP directly (no separate Collector
+    # needed) and serves both the query UI (16686) and its REST query API,
+    # which the milestone test hits directly rather than requiring a human
+    # to click through the UI.
+    image: jaegertracing/all-in-one:latest
+    container_name: bastion-jaeger
+    restart: unless-stopped
+    environment:
+      COLLECTOR_OTLP_ENABLED: 'true'
+    ports:
+      # Host ports 16686/4318 collided with an unrelated pre-existing
+      # Jaeger container already running on this dev machine (a different
+      # project) — same class of issue as Postgres's 5432->5442 and
+      # Redis's 6379->6389 remaps above. Container-internal ports are
+      # untouched (4318 is what Jaeger itself listens on); only the
+      # host-side mapping differs.
+      - '16687:16686'  # query UI + REST API
+      - '4319:4318'    # OTLP HTTP ingestion
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -q -O- http://localhost:16686/ || exit 1']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: bastion-prometheus
+    restart: unless-stopped
+    volumes:
+      - ../prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - '9090:9090'
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: bastion-grafana
+    restart: unless-stopped
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: 'true'
+      GF_AUTH_ANONYMOUS_ORG_ROLE: 'Admin'
+    volumes:
+      - ../grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - ../grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafanadata:/var/lib/grafana
+    ports:
+      - '3001:3000'
+    depends_on:
+      - prometheus
+
   generate-keys:
     build:
       context: ../..
@@ -206,4 +259,5 @@ volumes:
   pgdata:
   redisdata:
   miniodata:
+  grafanadata:
   jwtkeys:

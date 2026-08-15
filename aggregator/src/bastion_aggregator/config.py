@@ -29,6 +29,9 @@ class Config:
     # immediately, one message per update) — what every existing exact-
     # sequence test in this suite that predates U11 uses.
     ws_batch_window_seconds: float
+    # U12 (v2 upgrade) — same reasoning as interceptor/config.py's field of
+    # the same name.
+    otel_exporter_otlp_endpoint: str
 
 
 def load_config() -> Config:
@@ -45,6 +48,9 @@ def load_config() -> Config:
         kafka_bootstrap_servers=os.environ.get("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092"),
         db_query_timeout_seconds=float(os.environ.get("DB_QUERY_TIMEOUT_SECONDS", "30")),
         ws_batch_window_seconds=float(os.environ.get("WS_BATCH_WINDOW_SECONDS", "0.1")),
+        otel_exporter_otlp_endpoint=os.environ.get(
+            "OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4319"
+        ),
     )
 
 
