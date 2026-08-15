@@ -1180,7 +1180,80 @@ confirmed still on Postgres LISTEN/NOTIFY per v1 design) — no mismatch found.
   passed. Otherwise no application code changed in this phase (only `infra/` config, the k6 script,
   `README.md`, and this one test-timeout hardening), so no new pytest milestone test was written — the
   deliverable is the measurement and the alerting rules, not new application behavior.
-- U14–U16: not started.
+- **U14 — Chaos testing: done, full suite passing (9/9), one real gap fixed
+  along the way.** All 8 fault-injection scenarios from §16's table are now
+  automated tests in `aggregator/tests/chaos/` (`uv run pytest
+  aggregator/tests/chaos/`), each against real shared infrastructure —
+  `docker stop`/`docker start` on the actual `bastion-kafka`/`bastion-redis`
+  containers this test session's own live services are running against, not
+  simulated stand-ins — except scenario 8 ("reorder events"), which
+  UPGRADE_ARCHITECTURE.md's own wording only asks to be simulated (Kafka's
+  partition-key guarantee makes it unreproducible for real) and scenario 2
+  ("kill aggregator"), already proven by U3's own milestone test
+  (`test_kafka_resumability.py`), not duplicated. Full writeup, including
+  every "what broke on the first attempt" finding, is in
+  `docs/CHAOS_RESULTS.md` — summarized here:
+  - **Scenario 1 (kill interceptor mid-request)**: reproduced deterministically
+    (the exact DB mutation a process death between reserve/complete would
+    leave, not a raced real SIGKILL) rather than a raw process kill, for
+    reproducibility. Real finding: an orphaned idempotency-key reservation
+    never self-heals — every retry gets the same clean 503 forever, no
+    reaper exists. Accepted as a known limitation, not fixed this phase.
+  - **Scenario 4 (kill Redis)**: real doc/code conflict found and resolved
+    per the standing rule. §16's "policy cache falls back to Postgres fetch"
+    doesn't match the actual system: `PolicyCache` never touches Redis or
+    Postgres synchronously on a read at all — a miss defaults to
+    `Decision(action="allow")` (already-recorded, deliberate U5/ADR-007
+    design, chosen specifically to avoid a synchronous per-request Postgres
+    round-trip that would violate CLAUDE.md rule #4). Test verifies the
+    real behavior and cites ADR-007 rather than writing a redundant new
+    ADR. The rate-limits/circuit-breaker fail-open half (ADR-015) was
+    verified empirically against a real outage, not just trusted from the
+    ADR's prose.
+  - **Scenario 5 (Postgres +500ms latency)**: first implementation tried
+    monkeypatching methods directly onto the live `asyncpg.Pool` instance —
+    failed immediately, `asyncpg.Pool` defines `__slots__`
+    (`AttributeError: 'Pool' object attribute 'fetch' is read-only`). Fixed
+    by swapping `Database._pool` (a plain attribute) for a proxy object for
+    the test's duration; building it surfaced that `insert_event` (every
+    `/intercept` call's write) goes through `pool.acquire()` +
+    connection-level calls, not pool-level calls — the proxy's `acquire()`
+    had to return a similarly-wrapped connection to actually cover it.
+  - **Scenario 6 (drop WS mid-session)**: a real, previously-undiscovered
+    gap, fixed as part of this phase rather than only documented — WS
+    `/live/{agent_id}` never resynced anything on reconnect; a dropped
+    client's connection is registered and it waits for the future, silently
+    losing everything that happened while it was gone. Added
+    `_send_resync_snapshot` (`aggregator/src/bastion_aggregator/main.py`),
+    called right after `ws_manager.connect()` accepts a new connection —
+    replays `active_traces` for that agent as the same delta message types
+    a live client already reduces (`node_added` [+ `edge_added`], then
+    `node_updated`), no new message type needed. Scoped explicitly to
+    still-*running* traces only (a terminal trace is evicted from
+    `active_traces` by pre-existing design; `GET /traces/{id}` is what
+    history is for). connect-before-snapshot ordering accepts a rare
+    harmless duplicate over the alternative's risk of a silent miss.
+  - **Scenario 8 (reorder events, simulated)**: confirmed a real, silent
+    failure mode in `fold_events_to_graph` — an out-of-order
+    CallAllowed/CallCompleted arriving before their span's CallAttempted is
+    dropped with no error, permanently freezing that node at "pending" and,
+    if it was the root span, the whole trace at status "running" forever.
+    Not fixed (real design work contingent on no longer trusting ADR-014's
+    same-partition-per-trace_id ordering guarantee); documented as an
+    accepted risk this system's real pipeline is architecturally protected
+    from (the scenario is only reachable by calling the fold function
+    directly, bypassing Kafka entirely).
+  - Scenarios 3 (kill Kafka) and 7 (duplicate Kafka event) passed on the
+    first real run with no findings — the transactional outbox and the
+    re-fetch-and-refold-fresh consumer design already provided the
+    invariant by construction.
+  No new ADR: every resolution above cites an existing ADR (ADR-007,
+  ADR-014, ADR-015) rather than recording a new decision — this phase
+  found and, where in scope, fixed real gaps, but didn't make a new
+  architectural choice with a road not taken to record. Full workspace
+  suite after all fault injection (including two real Kafka/Redis container
+  outages during the test run itself): 217 passed.
+- U15–U16: not started.
 
 ### ADR checklist (mirrors `ADR_INDEX.md`)
 - [x] ADR-001: PostgreSQL as source of truth — `docs/adr/ADR-001-...md`.
@@ -1200,10 +1273,16 @@ confirmed still on Postgres LISTEN/NOTIFY per v1 design) — no mismatch found.
 **Load testing (U13): done — see the U13 entry above and `README.md`'s "v2 load test" section for the
 full results table.** The system misses its own `/intercept` p99 < 50ms SLO at every tested level at
 or above 50 RPS; real evidence (~75% single-core CPU at 25 RPS) implicates single-process CPU-bound
-saturation. No fix attempted this phase, per the "document the failure" rule. Chaos testing (U14):
-not started. U3's three real bugs (above) were found via ordinary milestone-test failures, not a
-dedicated chaos exercise — genuine findings, documented here per the same honesty standard chaos/load
-results will need, but not a substitute for U14's actual chaos suite.
+saturation. No fix attempted this phase, per the "document the failure" rule.
+
+**Chaos testing (U14): done — see the U14 entry above and `docs/CHAOS_RESULTS.md` for the full
+per-scenario writeup.** All 8 scenarios from UPGRADE_ARCHITECTURE.md §16 covered, 9/9 tests passing
+against real infrastructure (actual Kafka/Redis container outages, not mocks). One real gap found and
+fixed (WS reconnect never resynced state — U11's live channel), one real doc/code conflict found and
+resolved (Redis-outage policy-cache behavior, cites ADR-007), one real accepted-and-documented
+limitation (orphaned idempotency-key reservations don't self-heal), one real accepted-and-documented
+architectural risk (event reordering silently freezes trace state, protected against in practice only
+by ADR-014's partitioning guarantee).
 
 ## Known deviations from BUILD_PLAN.md
 - None in phase *order*. Implementation-level deviations from the original spec docs, all flagged in

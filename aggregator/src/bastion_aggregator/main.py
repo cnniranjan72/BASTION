@@ -297,6 +297,23 @@ async def live(websocket: WebSocket, agent_id: UUID) -> None:
         return
 
     await ws_manager.connect(agent_id, websocket)
+    # U14 chaos finding ("drop WS connection mid-session, client reconnects
+    # and correctly resyncs current graph state, not just future deltas"):
+    # a reconnecting client used to see nothing but whatever happened
+    # *after* this call — everything that happened while it was
+    # disconnected was silently lost, since ConnectionManager only ever
+    # broadcasts forward. connect() is called first so no future delta can
+    # be missed; the resync snapshot below replays active_traces as of
+    # right now through the exact same message types a live client already
+    # knows how to reduce (node_added [+ edge_added], then node_updated to
+    # the real current status) — no new client-side handling needed. The
+    # one accepted tradeoff of connect-then-snapshot ordering: a live event
+    # landing in the narrow window between connect() and the snapshot read
+    # could be replayed twice (once live, once in the snapshot) — a
+    # harmless duplicate. The alternative ordering (snapshot-then-connect)
+    # would instead risk silently *missing* that event, which is strictly
+    # worse for this invariant.
+    await _send_resync_snapshot(websocket, agent_id)
     try:
         while True:
             # No client->server protocol defined yet; just keep the
@@ -306,6 +323,34 @@ async def live(websocket: WebSocket, agent_id: UUID) -> None:
         pass
     finally:
         ws_manager.disconnect(agent_id, websocket)
+
+
+async def _send_resync_snapshot(websocket: WebSocket, agent_id: UUID) -> None:
+    for graph in list(active_traces.values()):
+        if graph.agent_id != agent_id:
+            continue
+        for node in graph.nodes:
+            await websocket.send_json(
+                NodeAddedMessage(
+                    node=LiveNode(span_id=node.span_id, tool_name=node.tool_name, status="pending")
+                ).model_dump(mode="json", by_alias=True)
+            )
+            if node.parent_span_id is not None:
+                await websocket.send_json(
+                    EdgeAddedMessage.model_validate(
+                        {"from": node.parent_span_id, "to": node.span_id}
+                    ).model_dump(mode="json", by_alias=True)
+                )
+            if node.status != "pending":
+                await websocket.send_json(
+                    NodeUpdatedMessage(
+                        span_id=node.span_id,
+                        status=node.status,
+                        latency_ms=node.latency_ms,
+                        cost=node.cost,
+                        reason=node.reason,
+                    ).model_dump(mode="json", by_alias=True)
+                )
 
 
 def _not_found(request: Request, trace_id: UUID) -> HTTPException:
