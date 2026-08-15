@@ -50,6 +50,12 @@ body {
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  /* Defensive backstop, not the primary fix (see .topbar__nav below) --
+     no single element should ever be able to force the whole page to
+     scroll sideways. Belt-and-suspenders: if something else overflows in
+     the future, it gets clipped/scrollable at its own container instead
+     of silently widening the page and leaving a blank strip on the right. */
+  overflow-x: hidden;
 }
 
 ::selection {
@@ -417,6 +423,18 @@ a {
   display: flex;
   gap: 0.2rem;
   margin-left: 1.5rem;
+  /* U16 grew this to 6 groups/12+ links, and flex items default to
+     min-width: auto -- meaning a flex child normally refuses to shrink
+     below its own content's intrinsic width even when flex-shrink allows
+     it, which is exactly what was forcing .topbar (and so the whole page,
+     since nothing contained it) wider than the viewport on every screen
+     under ~1780px -- effectively every real laptop width. min-width: 0
+     lets this row actually shrink; overflow-x lets it become its own
+     contained horizontal scroll region for the remainder instead of
+     pushing the page sideways. */
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
 }
 .topbar__nav-link {
   position: relative;
