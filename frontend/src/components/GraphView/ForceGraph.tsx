@@ -95,6 +95,40 @@ export function ForceGraph() {
 
   useFrame(() => {
     simulation.tick();
+    // Confirmed in production, not theoretical: several nodes spawned
+    // together (a resync burst on reconnect, or a live demo's rapid tool
+    // calls) can genuinely explode under forceManyBody's repulsion —
+    // `distanceMin` caps a single close pair's *force magnitude*, not the
+    // *accumulated* velocity from several simultaneous close neighbors
+    // compounding within one high-alpha tick. One such node was found
+    // sitting at (x=-7133, y=15584) after a 4-node burst — a real
+    // computed value, not NaN, so NodeMesh's finite-check guard doesn't
+    // catch it; the physics itself needs a hard bound, not just the
+    // render path. Clamping (and zeroing residual velocity so a clamped
+    // node doesn't immediately re-launch next tick) is a robust backstop
+    // regardless of how well the force constants above are ever tuned —
+    // OrbitControls' own maxDistance is 30, so nothing here needs to be
+    // further out than that to stay visible.
+    const MAX_POSITION = 15;
+    for (const node of simNodesRef.current.values()) {
+      const rawX = node.x ?? 0;
+      const rawY = node.y ?? 0;
+      const rawZ = node.z ?? 0;
+      const x = Number.isFinite(rawX) ? rawX : 0;
+      const y = Number.isFinite(rawY) ? rawY : 0;
+      const z = Number.isFinite(rawZ) ? rawZ : 0;
+      const clampedX = Math.min(MAX_POSITION, Math.max(-MAX_POSITION, x));
+      const clampedY = Math.min(MAX_POSITION, Math.max(-MAX_POSITION, y));
+      const clampedZ = Math.min(MAX_POSITION, Math.max(-MAX_POSITION, z));
+      if (clampedX !== node.x || clampedY !== node.y || clampedZ !== node.z) {
+        node.x = clampedX;
+        node.y = clampedY;
+        node.z = clampedZ;
+        node.vx = 0;
+        node.vy = 0;
+        node.vz = 0;
+      }
+    }
   });
 
   return (
