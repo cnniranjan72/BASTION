@@ -1428,6 +1428,113 @@ limitation (orphaned idempotency-key reservations don't self-heal), one real acc
 architectural risk (event reordering silently freezes trace state, protected against in practice only
 by ADR-014's partitioning guarantee).
 
+### Post-U15 production deploy fix — 2026-08-15
+
+Not a new phase — U9 through U15 were built and verified against local infrastructure across several
+sessions, then pushed to GitHub, but never actually redeployed. The frontend's Render auto-deploy kept
+succeeding on every push (no backend dependency of its own), so `bastion-frontend.onrender.com` quietly
+ran current code while the backend silently drifted, still serving U7 (`bastion-interceptor`) and U2
+(`bastion-aggregator`). This session found and fixed the whole chain, verifying each fix against the
+real thing it claims to fix rather than trusting a green deploy:
+
+- **CI itself was broken since U8**, before any of this session's work (same pytest step failed on the
+  last commit actually on GitHub). Two causes: `test_events_partitioning.py`/`test_row_level_security.py`
+  hardcoded `DATABASE_URL` to this machine's local Docker port instead of reading the env var like every
+  other test file — worked locally, never in CI. U14's chaos suite (`aggregator/tests/chaos/`) does
+  literal `docker stop`/`start` on containers named `bastion-kafka`/`bastion-redis`, which don't exist
+  under GitHub Actions' `services:` blocks — excluded from the CI pytest invocation with `--ignore`,
+  documented as local-Docker-Compose-only by design.
+- **Neon (the deployed environment's managed Postgres) was 7 migrations behind** (`0006`, should've been
+  `0013`) — no RLS, no `idempotency_keys`/`outbox_events` tables, no `bastion_app` role at all. Ran
+  `infra/db/migrate.py` against it directly (idempotent, transactional, safe to run against a live DB);
+  the role needed a stronger password created separately — Neon's control plane rejects the migration
+  file's own default at the platform level (a 400 from Neon's control plane, not a Postgres error), so
+  the idempotent `IF NOT EXISTS` role-creation check let a manually-created role with a real password
+  slot in cleanly on retry.
+- **`APP_DATABASE_URL`/`REDIS_URL`/`KAFKA_*`/`OBJECT_STORAGE_*` were never wired to Render at all** for
+  `interceptor`/`aggregator` — some (like `APP_DATABASE_URL`) didn't exist as env vars when the U8-era
+  service was first configured; none of Redis, Kafka, or S3 had ever had a managed instance provisioned
+  for production, only Postgres did (Neon). Both services call `db.connect()`/`redis_bus.connect()`/
+  `kafka_consumer.start()` inside FastAPI's `lifespan`, which Uvicorn awaits *before binding the HTTP
+  port at all* — so every one of these gaps manifested identically on Render: "Port scan timeout
+  reached, no open ports detected," zero application traceback. Wired in a real Redis (Redis Cloud),
+  Kafka (Redpanda Cloud Serverless — Upstash's Kafka product wasn't available on the account's plan),
+  and S3 (real AWS, once the IAM user's policy was scoped to exactly the 5 actions `object_storage.py`
+  actually calls on one bucket ARN — verified this precisely by reading the actual boto3 calls the code
+  makes, not by requesting broad access). The first IAM credential handed over had no policy attached at
+  all — `ListAllMyBuckets`, `CreateBucket`, even self-introspection (`GetUser`/`ListUserPolicies`) all
+  denied. The policy that unblocked it, scoped to exactly `head_bucket`/`create_bucket`/`head_object`/
+  `get_object`/`put_object` on one bucket ARN, nothing broader:
+  ```json
+  {
+    "Version": "2012-10-17",
+    "Statement": [
+      {
+        "Sid": "BastionPayloadsBucketLevel",
+        "Effect": "Allow",
+        "Action": ["s3:CreateBucket", "s3:ListBucket"],
+        "Resource": "arn:aws:s3:::bastion-payloads"
+      },
+      {
+        "Sid": "BastionPayloadsObjectLevel",
+        "Effect": "Allow",
+        "Action": ["s3:GetObject", "s3:PutObject"],
+        "Resource": "arn:aws:s3:::bastion-payloads/*"
+      }
+    ]
+  }
+  ```
+  (`s3:ListBucket` covers the `head_bucket` existence check; S3 has no separate IAM action for HEAD on
+  an object, so `s3:GetObject` covers both `head_object` and `get_object`.)
+- **`aiokafka` requires an explicit `ssl_context` for SASL_SSL** — raises `ValueError` at client
+  construction without one; doesn't build a default like some other Kafka clients. New
+  `shared/src/bastion_shared/kafka_auth.py` centralizes the security-protocol/mechanism/credential/
+  ssl-context kwargs for both the outbox publisher and the consumer; `KAFKA_SECURITY_PROTOCOL` defaults
+  to `PLAINTEXT` so local dev/CI is unaffected. First deploy attempt with real Redpanda credentials
+  still failed on exactly this — found and fixed by testing the connection locally against the real
+  broker before touching Render again, rather than iterating on live deploys.
+- **`ensure_bucket()` wasn't fail-open** unlike `upload_if_large`'s existing per-call fallback in the
+  same file (`interceptor/src/bastion_interceptor/object_storage.py`) — an unreachable bucket was
+  blocking the whole service's startup, not just degrading large-payload storage. Fixed to log and
+  continue, consistent with CLAUDE.md rule #4.
+- **No standalone `OutboxPublisher` process ran anywhere in production** — a gap already documented
+  since U13's load test. Render's free plan allows only web services, no background workers, so
+  provisioning it as its own service (the original, `docker-compose`-matching design) isn't available
+  without a paid plan. Added `RUN_OUTBOX_PUBLISHER_EMBEDDED` (opt-in, default off): when set, the
+  publisher runs as a background `asyncio` task inside the interceptor's own process — a deployment-
+  specific adaptation for the free-tier constraint, not a redesign; it's still never inline in
+  `/intercept`'s own request path. Local Docker Compose keeps the original separate-process shape via a
+  new `outbox-publisher` service.
+- **`docker-compose.yml`'s `interceptor`/`aggregator` services had never actually been exercised end to
+  end** — discovered while adding the `outbox-publisher` service above. They never set
+  `APP_DATABASE_URL`/`KAFKA_BOOTSTRAP_SERVERS`/`OBJECT_STORAGE_ENDPOINT_URL` to their in-network
+  hostnames, silently falling back to `config.py`'s `localhost` defaults (which don't exist inside a
+  container) — meaning `docker compose up`'s app services never actually started before this fix, only
+  individual pieces exercised via native/host processes and tests ever worked. Also found: Kafka's
+  single listener was advertised as `localhost:9092` — a container client bootstraps fine, then gets
+  told by the broker's own metadata response to reconnect to `localhost`, which resolves to itself
+  inside that container. Fixed with a second `INTERNAL` listener (`kafka:29092`, the standard
+  Kafka-in-Docker dual-listener pattern) plus the missing env vars, then verified for real: a live
+  `docker compose up` with the outbox publisher actually publishing a batch and the aggregator's
+  consumer actually fetching and heartbeating against it in the logs, not just services reporting
+  "healthy."
+- `docker-entrypoint.sh` hardcoded `exec uvicorn ...`, ignoring any command override — meant the
+  interceptor image could never double as the publisher process. Now passes `"$@"` through when a
+  command is given, defaulting to uvicorn otherwise; both Render's `dockerCommand` override and
+  `docker-compose.yml`'s new `outbox-publisher` service rely on this.
+
+**New gap found, not fixed this session**: no OTel collector is configured for the deployed environment
+either (`OTEL_EXPORTER_OTLP_ENDPOINT` has no production value, same story as Redis/Kafka/S3 before this
+session) — `interceptor` logs a continuous stream of harmless but noisy `Transient error ... Connection
+refused` retries in production. Non-fatal (already fails open by design), just log spam; flagged for a
+future session rather than provisioning a fourth piece of managed infrastructure without asking first.
+
+Full local suite (213 tests) reverified clean after every infra change in this chain, including once
+after a spurious 2-test failure traced to my own verification containers (`docker compose up`'d
+`interceptor`/`aggregator`/`outbox-publisher`) racing the test suite's own Kafka consumer groups and
+outbox rows on the shared local broker — confirmed as environmental pollution, not a regression, by
+stopping them and rerunning clean.
+
 ## Known deviations from BUILD_PLAN.md
 - None in phase *order*. Implementation-level deviations from the original spec docs, all flagged in
   code/API_SPEC.md/ARCHITECTURE.md rather than silently guessed: (1) interceptor language (Phase 0,
