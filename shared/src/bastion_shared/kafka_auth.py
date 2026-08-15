@@ -10,6 +10,7 @@ never changing local/CI behavior by default.
 
 from __future__ import annotations
 
+import ssl
 from typing import Any
 
 
@@ -22,9 +23,15 @@ def kafka_client_kwargs(
 ) -> dict[str, Any]:
     if security_protocol == "PLAINTEXT":
         return {}
-    return {
+    kwargs: dict[str, Any] = {
         "security_protocol": security_protocol,
-        "sasl_mechanism": sasl_mechanism,
-        "sasl_plain_username": sasl_username,
-        "sasl_plain_password": sasl_password,
+        # aiokafka, unlike some other Kafka clients, does not build a
+        # default SSL context itself -- SSL/SASL_SSL raises ValueError at
+        # construction time without one explicitly passed.
+        "ssl_context": ssl.create_default_context(),
     }
+    if security_protocol == "SASL_SSL":
+        kwargs["sasl_mechanism"] = sasl_mechanism
+        kwargs["sasl_plain_username"] = sasl_username
+        kwargs["sasl_plain_password"] = sasl_password
+    return kwargs
