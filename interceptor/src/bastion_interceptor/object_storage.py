@@ -66,13 +66,28 @@ async def ensure_bucket() -> None:
     """Idempotent — called once at startup (main.py's lifespan). Creating a
     bucket that already exists is a no-op error we swallow, not a crash;
     the bucket persisting across restarts (a MinIO volume, or real S3) is
-    the normal case."""
-    async with _session().client("s3", **_client_kwargs()) as s3:
-        try:
-            await s3.head_bucket(Bucket=config.object_storage_bucket)
-        except Exception:
-            await s3.create_bucket(Bucket=config.object_storage_bucket)
-            log.info("object storage bucket created", bucket=config.object_storage_bucket)
+    the normal case.
+
+    Fails open, not closed — same reasoning as upload_if_large below: this
+    runs in the startup path (main.py's lifespan), which the ASGI server
+    awaits *before* binding its port at all, so an unreachable/unprovisioned
+    bucket must never prevent the whole service from starting. A real
+    outage here degrades to "payloads over the threshold are stored inline
+    instead" (upload_if_large's own except-branch already handles that per
+    call), never to "the service never comes up."""
+    try:
+        async with _session().client("s3", **_client_kwargs()) as s3:
+            try:
+                await s3.head_bucket(Bucket=config.object_storage_bucket)
+            except Exception:
+                await s3.create_bucket(Bucket=config.object_storage_bucket)
+                log.info("object storage bucket created", bucket=config.object_storage_bucket)
+    except Exception:
+        log.exception(
+            "object storage unreachable at startup — continuing without it "
+            "(large payloads will be stored inline until it's available)",
+            bucket=config.object_storage_bucket,
+        )
 
 
 async def upload_if_large(payload: dict[str, Any]) -> dict[str, Any]:
