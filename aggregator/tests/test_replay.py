@@ -70,13 +70,32 @@ async def _wait_for_persisted_trace(
 ) -> dict:
     """The aggregator persists trace_summaries asynchronously, off a
     LISTEN/NOTIFY notification — not synchronously with the intercept calls
-    above, so the test polls rather than asserting immediately."""
+    above, so the test polls rather than asserting immediately.
+
+    Waits for *both* GET /traces/{id} to report a terminal status *and* the
+    trace to actually show up in GET /traces (list) — not just the former.
+    GET /traces/{id} alone can return a correct terminal status before the
+    trace_summaries row exists at all, via that endpoint's documented
+    fold-fresh fallback (main.py: "graph_snapshot if a persisted projection
+    exists, else folds events fresh"); GET /traces only ever returns
+    persisted rows ("Persisted (terminal-state) traces only"). A caller
+    that gets a terminal single-trace result and immediately queries the
+    list endpoint — test_list_traces_scoped_by_org below did exactly this —
+    was racing the LISTEN/NOTIFY-driven projection write, not actually
+    waiting for it; this is the real fix, not a longer timeout."""
     deadline = time.monotonic() + deadline_seconds
     async with _aggregator_client() as http:
         while time.monotonic() < deadline:
             response = await http.get(f"/traces/{trace_id}", headers=_auth_headers(login))
             if response.status_code == 200 and response.json()["status"] != "running":
-                return response.json()
+                graph = response.json()
+                listed = await http.get(
+                    "/traces",
+                    params={"agent_id": graph["agent_id"]},
+                    headers=_auth_headers(login),
+                )
+                if any(t["trace_id"] == str(trace_id) for t in listed.json()):
+                    return graph
             await asyncio.sleep(0.05)
     raise AssertionError("trace was not persisted as terminal in time")
 
