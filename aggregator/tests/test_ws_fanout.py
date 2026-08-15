@@ -64,7 +64,8 @@ async def test_broadcast_from_one_gateway_reaches_clients_on_both(
     try:
         span_id = uuid.uuid4()
         message = NodeAddedMessage(
-            node=LiveNode(span_id=span_id, tool_name="fanout.test", status="pending")
+            trace_id=uuid.uuid4(),
+            node=LiveNode(span_id=span_id, tool_name="fanout.test", status="pending"),
         )
         # Published via gateway_1 only — gateway_2 never touches this call
         # at all, yet its own client must still receive it.
@@ -105,14 +106,21 @@ async def test_burst_of_rapid_updates_coalesces_and_measures_propagation_latency
 
     try:
         span_id = uuid.uuid4()
+        trace_id = uuid.uuid4()
         burst_size = 200
         for i in range(burst_size):
             await manager.broadcast(
                 agent_id,
-                NodeUpdatedMessage(span_id=span_id, status="allowed" if i % 2 == 0 else "failed"),
+                NodeUpdatedMessage(
+                    trace_id=trace_id,
+                    span_id=span_id,
+                    status="allowed" if i % 2 == 0 else "failed",
+                ),
             )
         # The final, real state — must be what the client ultimately sees.
-        await manager.broadcast(agent_id, NodeUpdatedMessage(span_id=span_id, status="completed"))
+        await manager.broadcast(
+            agent_id, NodeUpdatedMessage(trace_id=trace_id, span_id=span_id, status="completed")
+        )
         publish_done = time.perf_counter()
 
         deadline = time.monotonic() + 5.0

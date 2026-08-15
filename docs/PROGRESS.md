@@ -1253,7 +1253,145 @@ confirmed still on Postgres LISTEN/NOTIFY per v1 design) — no mismatch found.
   architectural choice with a road not taken to record. Full workspace
   suite after all fault injection (including two real Kafka/Redis container
   outages during the test run itself): 217 passed.
-- U15–U16: not started.
+- **U15 — Frontend v2: the 3 flagship experiences done, deeply; the 7
+  supporting surfaces deliberately deferred.** Per an explicit scoping
+  decision made with the user before starting (U15's full scope — 3
+  flagships + Command Center/Trace Explorer/Approval Center/Threat
+  Center/Agent Health/Cost Center/command palette — is realistically its
+  own multi-session phase): built Live Execution Graph, Policy Studio, and
+  Incident Replay to a real, backend-verified standard; left the 7
+  supporting surfaces as v1's existing pages (OverviewPage, TracesPage,
+  ApprovalsPage, AnalyticsPage, AgentsPage, TeamPage, CommandPalette),
+  unmodified this phase, not replaced with anything half-built. Every
+  screen was verified against the real running interceptor/aggregator in
+  a browser (Chrome automation), not just typechecked — per CLAUDE.md's
+  UI-verification rule.
+
+  **Two real backend gaps found and filled before any UI was built around
+  them** (FRONTEND_V2.md's non-negotiable rule: build the screen after its
+  backend dependency, not before) — `docs/adr/ADR-020`:
+  - `POST /policies/simulate` — Policy Studio's simulator. Reuses the
+    exact `policy_cache.get()` + `policy_engine.evaluate()` chain
+    `/intercept` itself calls; deliberately never calls
+    `limits.check_and_apply_limits`/`circuit_breaker.is_open` (would
+    consume the agent's real rate-limit/spend budget for a hypothetical
+    call) — configured limits are surfaced informationally instead.
+  - `GET /policies/{policy_set_id}/propagation` — Policy Studio's
+    propagation-status panel. Real doc/code scope note: no multi-replica
+    interceptor registry exists anywhere in this codebase, so
+    `known_interceptor_instances` is honestly always `1` (the instance
+    handling the request) rather than FRONTEND_V2.md's literal "4/4
+    interceptors" example — the underlying comparison (Postgres's real
+    active version vs. this process's real live `policy_cache`) is fully
+    real; only the UI copy differs from the doc's literal wording.
+  - Both required small additive `db.py` methods (`get_agent_by_id`,
+    `get_active_policy_for_set_in_org`, `get_policy_version_by_id`) and
+    `bastion_shared.policy_api` response models
+    (`SimulatePolicyRequest/Response`, `PolicyPropagationResponse`).
+
+  **A third small additive backend change**: `NodeAddedMessage`/
+  `NodeUpdatedMessage` (`shared/src/bastion_shared/realtime.py`) gained a
+  `trace_id` field — the Live Execution Graph inspector needs it (an
+  agent can have more than one concurrent trace; the pre-existing live
+  message shape had no way to tell which trace a span belonged to), and
+  it didn't exist before this phase. Wired through all 4 construction
+  sites in `aggregator/main.py` (`_handle_notification`'s two branches,
+  `_send_resync_snapshot`'s two branches); updated the two existing tests
+  that constructed these messages directly (`test_ws_fanout.py`).
+
+  **Live Execution Graph** (`Dashboard.tsx`, split out from v1's
+  conflated live+static-replay page): real WS fan-out (U11/U14),
+  reconnect-with-backoff added to `useLiveGraph.ts` (v1's hook never
+  retried a dropped connection at all — each fresh connection triggers
+  U14's server-side resync burst, so the reconnect logic is genuinely
+  what makes "drop mid-session, reconnect, see full current state" true
+  end to end, not just the server half of it). New timeline strip
+  (`TimelineStrip.tsx`, backed by a new `timeline` array in
+  `store/graph.ts`) — client-receive timestamps, not server event time
+  (LiveMessage carries none; a deliberate scope boundary, distinct from
+  Incident Replay's real historical timestamps). Inspector panel
+  (`InspectorPanel.tsx`) extended with agent_id/trace_id/last-update and a
+  "Why?" section — FRONTEND_V2.md's shared "Why?" affordance, implemented
+  here rather than as a fully separate cross-screen component (that
+  extraction is deferred with the 7 supporting surfaces it would also
+  serve). Verified live end-to-end via real `curl POST /intercept` calls
+  against a running interceptor while watching the browser update in
+  real time, including a genuine drop-and-reconnect showing stale-plus-new
+  state merge correctly.
+
+  **Policy Studio** (`PolicyStudio/` — `RuleBuilder.tsx`,
+  `PolicySimulator.tsx`, `VersionDiff.tsx`, `PropagationStatus.tsx`,
+  `PolicyStudioPage.tsx`): a structured rule builder (WHEN tool / pattern
+  / IF condition / THEN action, plus per-rule `limits`) compiling to the
+  exact `PolicyRule[]` shape `POST /policies` already accepts — not a
+  JSON textarea (that's `PoliciesPage.tsx`'s job, kept as-is, still
+  reachable at `/policies`). Verified in-browser end to end: built a real
+  2-rule policy, activated it, ran the simulator against both a blocked
+  case (real `amount > 100` condition match) and an allowed case
+  (configured `calls_per_minute` limit shown, not applied), created a v2
+  with a changed limit and confirmed the version diff correctly showed
+  the field-level change plus "Affects 1 agent... u15-demo-agent," and
+  confirmed the propagation panel read "Policy v1 active on this
+  interceptor (1/1 known)" — a real API call, not a static "Saved ✓."
+  **Scope, stated explicitly**: "who changed it" (part of FRONTEND_V2.md's
+  version-diff ask) isn't shown — the `policies` table has no
+  `created_by` column (`infra/db/migrations/0002_policies.sql`); inventing
+  an attribution would violate the same no-mock-data rule this whole phase
+  is built around.
+
+  **Incident Replay** (`Replay/` — `ReplayTimeline.tsx`,
+  `IncidentReplayPage.tsx`, new route `/replay/:traceId`; `store/replay.ts`;
+  `lib/foldEvents.ts`, `lib/eventLabels.ts`): a direct TypeScript port of
+  the backend's own `fold_events_to_graph` re-folds a prefix of the real
+  `GET /traces/{id}/events` log at every scrub/play step and pushes the
+  result through the *same* `loadSnapshot()` the live view's 3D rendering
+  stack already consumes — no parallel rendering code, no synthetic
+  replay-data storage, matching FRONTEND_V2.md's explicit requirement
+  that replay be derivable purely from the event log. Play/pause/scrub
+  transport, per-step real relative timestamps in the
+  `"00:00.854 Agent requests payments.transfer"` format FRONTEND_V2.md's
+  own spec uses. Verified in-browser against a real completed trace: real
+  step labels ("Agent requests customers.lookup" → "ALLOWED" → "Completed
+  (43ms)"), a real 3-minute-37-second timestamp gap reflecting actual
+  wall-clock time between the two `curl` calls used to generate the test
+  trace (not a fabricated number), and clicking a step correctly
+  re-folded and re-rendered the 3D graph at that exact point.
+
+  **Real gap re-discovered during browser verification, not new to this
+  phase**: no standalone `OutboxPublisher` process runs outside test
+  fixtures or the (nonexistent) docker-compose service for it — already
+  found and documented during U13's load testing. Manually starting one
+  (`python -m bastion_interceptor.outbox_publisher`) was required before
+  any live-mode call showed up in the browser; without it, `outbox_events`
+  rows queue forever and nothing reaches Kafka. Not fixed this phase
+  (infra/deployment scope, not a frontend concern) — reconfirms the same
+  finding, now from the frontend side too.
+
+  **Testing-tool artifact, not a code bug**: mid-verification, the Live
+  Execution Graph's 3D canvas appeared to render nothing in one browser
+  tab despite the timeline/inspector correctly showing live data (proving
+  the store/WS pipeline itself was fine). Opening a *fresh* tab and
+  repeating the exact same live-call test rendered the 3D nodes
+  correctly. Root cause not fully diagnosed but consistent with Chrome's
+  per-tab WebGL context budget being exhausted after this session's very
+  large number of same-tab navigations during manual testing — not a
+  regression in `GraphCanvas`/`ForceGraph`/`NodeMesh` (none of which this
+  phase modified).
+
+  **Scope, stated explicitly**: object-storage payload resolution
+  (U9/ADR-011's already-documented gap — `GET /traces/{id}` and
+  `GET /traces/{id}/events` never resolve offloaded (≥8KB) payloads) is
+  still unresolved; large `args`/`result` values would show as a raw S3
+  pointer object in the inspector/replay rather than real content. Not
+  retrofitted this phase — genuinely rare in this system's realistic
+  payload sizes, and building a frontend-facing resolution endpoint is
+  real scope on its own, not a "while we're here" fix.
+
+  No frontend test suite exists yet (v1 shipped without one — `package.json`
+  has no `test` script) — verification for both v1 and this phase's
+  additions is typecheck + lint + real in-browser exercise, consistent
+  with how v1 was originally verified.
+- U16: not started.
 
 ### ADR checklist (mirrors `ADR_INDEX.md`)
 - [x] ADR-001: PostgreSQL as source of truth — `docs/adr/ADR-001-...md`.
@@ -1268,6 +1406,12 @@ confirmed still on Postgres LISTEN/NOTIFY per v1 design) — no mismatch found.
   `UPGRADE_BUILD_PLAN.md`).
 - [x] ADR-017 (unlisted, added U1): call state machine modeling — see
   `docs/adr/ADR-017-call-state-machine-modeling.md`.
+- [x] ADR-018 (unlisted, added U7): authorization chain reuses the policy evaluator — see
+  `docs/adr/ADR-018-authorization-chain-reuses-policy-evaluator.md`.
+- [x] ADR-019 (unlisted, added U12): OTel trace naming and Kafka context propagation — see
+  `docs/adr/ADR-019-otel-trace-naming-and-kafka-propagation.md`.
+- [x] ADR-020 (unlisted, added U15): policy simulator and propagation-status endpoint scope — see
+  `docs/adr/ADR-020-policy-simulator-and-propagation-status-scope.md`.
 
 ### Chaos / load test status
 **Load testing (U13): done — see the U13 entry above and `README.md`'s "v2 load test" section for the

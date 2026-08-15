@@ -54,7 +54,13 @@ from .jwt_auth import (
 )
 from .kafka_topics import TOOL_EVENTS_TOPIC
 from .policy import Policy, PolicyDefinition, PolicyLimits, PolicyMatch, PolicyRule
-from .policy_api import CreatePolicyRequest, PolicyResponse
+from .policy_api import (
+    CreatePolicyRequest,
+    PolicyPropagationResponse,
+    PolicyResponse,
+    SimulatePolicyRequest,
+    SimulatePolicyResponse,
+)
 from .realtime import (
     EdgeAddedMessage,
     LiveMessage,
@@ -125,7 +131,10 @@ __all__ = [
     "PolicyMatch",
     "PolicyRule",
     "CreatePolicyRequest",
+    "PolicyPropagationResponse",
     "PolicyResponse",
+    "SimulatePolicyRequest",
+    "SimulatePolicyResponse",
     "CompleteSpanRequest",
     "CompleteSpanResponse",
     "EdgeAddedMessage",

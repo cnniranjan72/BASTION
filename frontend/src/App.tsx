@@ -12,6 +12,8 @@ import { AnalyticsPage } from "./components/AnalyticsPage";
 import { AccountPage } from "./components/AccountPage";
 import { ToastHost } from "./components/ToastHost";
 import { CommandPalette } from "./components/CommandPalette";
+import { IncidentReplayPage } from "./components/Replay/IncidentReplayPage";
+import { PolicyStudioPage } from "./components/PolicyStudio/PolicyStudioPage";
 import { useAuthStore } from "./store/auth";
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
@@ -57,6 +59,22 @@ export function App() {
           element={
             <RequireAuth>
               <PoliciesPage />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/policy-studio"
+          element={
+            <RequireAuth>
+              <PolicyStudioPage />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/replay/:traceId"
+          element={
+            <RequireAuth>
+              <IncidentReplayPage />
             </RequireAuth>
           }
         />

@@ -8,7 +8,9 @@ import type {
   CreateUserResponse,
   ErrorResponse,
   Policy,
+  PolicyPropagationResponse,
   RawEvent,
+  SimulatePolicyResponse,
   TeamMember,
   TokenPairResponse,
   TraceGraph,
@@ -156,13 +158,20 @@ export const api = {
     }),
 
   listPolicies: () => request<Policy[]>(INTERCEPTOR_BASE, "/policies"),
-  createPolicy: (name: string, definition: Policy["definition"]) =>
+  createPolicy: (name: string, definition: Policy["definition"], basedOnVersion?: number) =>
     request<Policy>(INTERCEPTOR_BASE, "/policies", {
       method: "POST",
-      body: JSON.stringify({ name, definition }),
+      body: JSON.stringify({ name, definition, based_on_version: basedOnVersion ?? null }),
     }),
   activatePolicy: (id: string) =>
     request<Policy>(INTERCEPTOR_BASE, `/policies/${id}/activate`, { method: "POST" }),
+  simulatePolicy: (agentId: string, toolName: string, args: Record<string, unknown>) =>
+    request<SimulatePolicyResponse>(INTERCEPTOR_BASE, "/policies/simulate", {
+      method: "POST",
+      body: JSON.stringify({ agent_id: agentId, tool_name: toolName, args }),
+    }),
+  getPolicyPropagation: (policySetId: string) =>
+    request<PolicyPropagationResponse>(INTERCEPTOR_BASE, `/policies/${policySetId}/propagation`),
 
   listApprovals: () => request<ApprovalRequest[]>(INTERCEPTOR_BASE, "/approvals"),
   approve: (id: string) =>

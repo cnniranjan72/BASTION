@@ -71,9 +71,12 @@ from bastion_shared import (
     LoginRequest,
     LogoutRequest,
     PolicyDecisionPayload,
+    PolicyPropagationResponse,
     PolicyResponse,
     RefreshRequest,
     SignupRequest,
+    SimulatePolicyRequest,
+    SimulatePolicyResponse,
     TokenPairResponse,
     UpdateAgentRequest,
     UpdateUserRoleRequest,
@@ -914,6 +917,100 @@ async def activate_policy(
     # *other* running interceptor instance picks it up too, with no restart.
     await redis_bus.publish_policy_update(record["policy_set_id"])
     return _policy_response(record)
+
+
+@app.post("/policies/simulate")
+async def simulate_policy(
+    body: SimulatePolicyRequest,
+    request: Request,
+    user: AuthenticatedUser = require_any_role,
+) -> SimulatePolicyResponse:
+    """U15 (v2 upgrade), Policy Studio's simulator. Real evaluation chain,
+    not a UI-only approximation: the same `policy_cache.get()` and
+    `policy_engine.evaluate()` `/intercept` itself calls, against the
+    target agent's real, currently-assigned policy — never a separate
+    simulated cache or a re-implementation of the matching logic.
+
+    Deliberately does NOT call `limits.check_and_apply_limits` or
+    `circuit_breaker.is_open` — both mutate real Redis state (rate-limit
+    counters, breaker failure streaks) keyed on this agent, which a
+    hypothetical "what if" call must not actually consume. The matched
+    rule's configured `limits` are still surfaced, informationally, so the
+    simulator can show what *would* be checked without actually checking
+    it against live state. See docs/adr for this design choice."""
+    agent = await db.get_agent_by_id(body.agent_id, user.org_id)
+    if agent is None:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": {
+                    "code": "AGENT_NOT_FOUND",
+                    "message": f"no agent {body.agent_id}",
+                    "request_id": request.state.request_id,
+                }
+            },
+        )
+    policy_set_id = agent["default_policy_set_id"]
+    compiled_policy = policy_engine.policy_cache.get(policy_set_id)
+    decision = policy_engine.evaluate(compiled_policy, body.tool_name, body.args)
+    return SimulatePolicyResponse(
+        decision=decision.action,  # type: ignore[arg-type]
+        reason=decision.reason,
+        policy_id=compiled_policy.policy_id if compiled_policy is not None else None,
+        policy_set_id=policy_set_id,
+        matched_rule_tool=decision.rule_tool,
+        configured_limits=decision.limits,
+    )
+
+
+@app.get("/policies/{policy_set_id}/propagation")
+async def get_policy_propagation(
+    policy_set_id: UUID,
+    request: Request,
+    user: AuthenticatedUser = require_any_role,
+) -> PolicyPropagationResponse:
+    """U15 (v2 upgrade), Policy Studio's propagation-status panel —
+    FRONTEND_V2.md: "Policy v14 active across 4/4 interceptors ... proves
+    the UI is wired to real distributed state, not faked." Real doc/code
+    scope note, resolved rather than silently reinterpreted: no
+    multi-replica registry exists anywhere in this codebase (no heartbeat
+    table, no service discovery) — `known_interceptor_instances` is
+    honestly 1, the single instance handling this request, not a
+    fabricated fleet count. What IS real here: an actual comparison
+    between Postgres's currently-active version (the source of truth) and
+    this process's actual live `policy_cache` — the same cache
+    `/intercept` reads on every call, not a status flag maintained
+    separately for display purposes."""
+    active = await db.get_active_policy_for_set_in_org(policy_set_id, user.org_id)
+    if active is None:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": {
+                    "code": "POLICY_SET_NOT_FOUND",
+                    "message": f"no active policy for policy_set {policy_set_id}",
+                    "request_id": request.state.request_id,
+                }
+            },
+        )
+    cached = policy_engine.policy_cache.get(policy_set_id)
+    if cached is not None and cached.policy_id == active["id"]:
+        this_instance_cached_version: int | None = active["version"]
+        propagated = True
+    elif cached is not None:
+        this_instance_cached_version = await db.get_policy_version_by_id(cached.policy_id)
+        propagated = False
+    else:
+        this_instance_cached_version = None
+        propagated = False
+    return PolicyPropagationResponse(
+        policy_set_id=policy_set_id,
+        active_version=active["version"],
+        active_policy_id=active["id"],
+        this_instance_cached_version=this_instance_cached_version,
+        propagated=propagated,
+        known_interceptor_instances=1,
+    )
 
 
 def _agent_response(record: Any) -> AgentResponse:

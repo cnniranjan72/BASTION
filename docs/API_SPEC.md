@@ -216,6 +216,25 @@ exactly like a JWT — identical RBAC, no separate weaker path.
   in the same policy set, activates this one, hot-reloads every interceptor instance via
   Redis pub/sub (no restart). Org ownership is checked *before* any row is mutated, not
   filtered from the response afterward.
+- `POST /policies/simulate` (any role) — U15 (v2 upgrade), Policy Studio's simulator,
+  `docs/adr/ADR-020`. Body: `{ "agent_id": "uuid", "tool_name": "...", "args": {...} }`.
+  Resolves `agent_id` to that agent's real `default_policy_set_id`, then calls the exact same
+  `policy_cache.get()` + `evaluate()` chain `/intercept` itself uses — never a separate
+  simulated evaluator. Response: `{ "decision": "allow"|"block"|"require_approval", "reason":
+  "...", "policy_id": "uuid", "policy_set_id": "uuid", "matched_rule_tool": "...",
+  "configured_limits": {...} }`. `configured_limits` is informational only — this endpoint
+  never calls `limits.check_and_apply_limits`/`circuit_breaker.is_open`, so a simulated call
+  never consumes the agent's real rate-limit/spend budget or affects a real circuit breaker.
+  404 `AGENT_NOT_FOUND` for a missing/cross-org `agent_id`.
+- `GET /policies/{policy_set_id}/propagation` (any role) — U15 (v2 upgrade), Policy Studio's
+  propagation-status panel, `docs/adr/ADR-020`. Compares Postgres's real active version for
+  that policy set against this interceptor instance's real, live `policy_cache`. Response:
+  `{ "policy_set_id": "uuid", "active_version": 3, "active_policy_id": "uuid",
+  "this_instance_cached_version": 3, "propagated": true, "known_interceptor_instances": 1 }`.
+  `known_interceptor_instances` is honestly always `1` — no multi-replica registry exists in
+  this codebase (ADR-020); this reports the single instance actually handling the request, not
+  a fabricated fleet count. 404 `POLICY_SET_NOT_FOUND` if there's no active policy for that set
+  in the caller's org.
 
 ### Approvals
 - `GET /approvals` (any role) — pending approvals for the caller's org (BUILD_PLAN.md's

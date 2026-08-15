@@ -122,9 +122,10 @@ async def _handle_notification(data: dict[str, Any]) -> None:
         await ws_manager.broadcast(
             agent_id,
             NodeAddedMessage(
+                trace_id=trace_id,
                 node=LiveNode(
                     span_id=span_id, tool_name=payload.get("tool_name", ""), status="pending"
-                )
+                ),
             ),
         )
         parent_span_id_raw = data.get("parent_span_id")
@@ -143,6 +144,7 @@ async def _handle_notification(data: dict[str, Any]) -> None:
             await ws_manager.broadcast(
                 agent_id,
                 NodeUpdatedMessage(
+                    trace_id=trace_id,
                     span_id=span_id,
                     status=status,
                     latency_ms=payload.get("latency_ms"),
@@ -332,7 +334,8 @@ async def _send_resync_snapshot(websocket: WebSocket, agent_id: UUID) -> None:
         for node in graph.nodes:
             await websocket.send_json(
                 NodeAddedMessage(
-                    node=LiveNode(span_id=node.span_id, tool_name=node.tool_name, status="pending")
+                    trace_id=graph.trace_id,
+                    node=LiveNode(span_id=node.span_id, tool_name=node.tool_name, status="pending"),
                 ).model_dump(mode="json", by_alias=True)
             )
             if node.parent_span_id is not None:
@@ -344,6 +347,7 @@ async def _send_resync_snapshot(websocket: WebSocket, agent_id: UUID) -> None:
             if node.status != "pending":
                 await websocket.send_json(
                     NodeUpdatedMessage(
+                        trace_id=graph.trace_id,
                         span_id=node.span_id,
                         status=node.status,
                         latency_ms=node.latency_ms,

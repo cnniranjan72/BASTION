@@ -16,11 +16,17 @@ class LiveNode(BaseModel):
 
 class NodeAddedMessage(BaseModel):
     type: Literal["node_added"] = "node_added"
+    # U15 (v2 upgrade): the Live Execution Graph inspector needs trace_id
+    # to show/link the owning trace, and an agent can have more than one
+    # concurrent trace running — without this, a client watching one
+    # agent_id has no way to tell which trace a given span belongs to.
+    trace_id: UUID
     node: LiveNode
 
 
 class NodeUpdatedMessage(BaseModel):
     type: Literal["node_updated"] = "node_updated"
+    trace_id: UUID
     span_id: UUID
     status: Literal["allowed", "blocked", "pending_approval", "completed", "failed"]
     latency_ms: float | None = None

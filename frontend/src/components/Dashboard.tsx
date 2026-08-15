@@ -1,30 +1,30 @@
 import { useEffect, useState } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { Link } from "react-router-dom";
 import { api, ApiError } from "../api/client";
-import { useGraphStore } from "../store/graph";
 import { useLiveGraph } from "../hooks/useLiveGraph";
 import { TRACE_STATUS_LABEL } from "../lib/labels";
 import { GraphCanvas } from "./GraphView/GraphCanvas";
 import { GraphLegend } from "./GraphView/GraphLegend";
+import { TimelineStrip } from "./GraphView/TimelineStrip";
 import { InspectorPanel } from "./InspectorPanel";
 import { TopBar } from "./TopBar";
 import type { Agent, TraceSummary } from "../api/types";
 
-type ViewMode =
-  { kind: "idle" } | { kind: "live"; agentId: string } | { kind: "replay"; traceId: string };
-
+/** U15 (v2 upgrade): the Live Execution Graph flagship screen, split out
+ * from v1's Dashboard, which conflated live viewing with a static
+ * final-state "replay" (just loadSnapshot + render once, no timeline, no
+ * animation). Historical replay is now IncidentReplayPage — a genuinely
+ * different experience (step-through with real timestamps), not a mode
+ * of this one. This page is live-only. */
 export function Dashboard() {
-  const [searchParams, setSearchParams] = useSearchParams();
-  const [mode, setMode] = useState<ViewMode>({ kind: "idle" });
+  const [agentId, setAgentId] = useState<string | null>(null);
   const [agentIdInput, setAgentIdInput] = useState("");
   const [agents, setAgents] = useState<Agent[]>([]);
   const [agentsLoaded, setAgentsLoaded] = useState(false);
   const [traces, setTraces] = useState<TraceSummary[]>([]);
   const [tracesError, setTracesError] = useState<string | null>(null);
-  const loadSnapshot = useGraphStore((s) => s.loadSnapshot);
-  const reset = useGraphStore((s) => s.reset);
 
-  const liveStatus = useLiveGraph(mode.kind === "live" ? mode.agentId : null);
+  const liveStatus = useLiveGraph(agentId);
 
   useEffect(() => {
     api
@@ -50,40 +50,16 @@ export function Dashboard() {
     return () => {
       cancelled = true;
     };
-    // Re-fetch whenever we switch views — a trace that just finished (live
-    // -> completed) won't show up in the list until we ask again.
-  }, [mode]);
-
-  async function openReplay(traceId: string) {
-    try {
-      const graph = await api.getTrace(traceId);
-      loadSnapshot(graph);
-      setMode({ kind: "replay", traceId });
-    } catch (err) {
-      setTracesError(err instanceof ApiError ? err.message : "Failed to load trace");
-    }
-  }
+  }, [agentId]);
 
   function goLive() {
     if (!agentIdInput.trim()) return;
-    reset();
-    setMode({ kind: "live", agentId: agentIdInput.trim() });
+    setAgentId(agentIdInput.trim());
   }
-
-  // Deep link from the Traces page (/graph?trace=<id>) — open replay once,
-  // then drop the query param so it doesn't re-fire on later state changes.
-  useEffect(() => {
-    const traceId = searchParams.get("trace");
-    if (traceId) {
-      openReplay(traceId);
-      setSearchParams({}, { replace: true });
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchParams]);
 
   return (
     <div className="dashboard">
-      <TopBar liveStatus={mode.kind === "live" ? liveStatus : null} />
+      <TopBar liveStatus={agentId ? liveStatus : null} />
       <div className="dashboard__body">
         <aside className="sidebar">
           <section>
@@ -117,21 +93,20 @@ export function Dashboard() {
 
           <section>
             <h2>Recent traces</h2>
+            <p className="sidebar__hint">Replay a past trace step-by-step in Incident Replay.</p>
             {tracesError && <p className="sidebar__error">{tracesError}</p>}
             <ul className="trace-list">
               {traces.map((trace) => (
                 <li key={trace.trace_id}>
-                  <button
-                    className={`trace-list__item trace-list__item--${trace.status} ${
-                      mode.kind === "replay" && mode.traceId === trace.trace_id ? "is-active" : ""
-                    }`}
-                    onClick={() => openReplay(trace.trace_id)}
+                  <Link
+                    className={`trace-list__item trace-list__item--${trace.status}`}
+                    to={`/replay/${trace.trace_id}`}
                   >
                     <span className="trace-list__status">{TRACE_STATUS_LABEL[trace.status]}</span>
                     <span className="trace-list__meta">
                       {trace.total_calls} calls · {trace.blocked_calls} blocked
                     </span>
-                  </button>
+                  </Link>
                 </li>
               ))}
               {traces.length === 0 && !tracesError && (
@@ -141,27 +116,30 @@ export function Dashboard() {
           </section>
         </aside>
 
-        <main className="graph-area">
-          {mode.kind === "idle" ? (
-            <div className="graph-area__placeholder">
-              {agentsLoaded && agents.length === 0 ? (
-                <>
-                  Nothing to show yet — <Link to="/agents">create your first agent</Link> to get an
-                  API key, point it at BASTION, and its calls will show up here live.
-                </>
-              ) : (
-                "Choose an agent and connect, or pick a trace to replay."
-              )}
-            </div>
-          ) : (
-            <>
-              <GraphCanvas />
-              <GraphLegend />
-            </>
-          )}
-        </main>
+        <div className="graph-area-wrap">
+          <main className="graph-area">
+            {!agentId ? (
+              <div className="graph-area__placeholder">
+                {agentsLoaded && agents.length === 0 ? (
+                  <>
+                    Nothing to show yet — <Link to="/agents">create your first agent</Link> to get
+                    an API key, point it at BASTION, and its calls will show up here live.
+                  </>
+                ) : (
+                  "Choose an agent and connect to watch it run live."
+                )}
+              </div>
+            ) : (
+              <>
+                <GraphCanvas />
+                <GraphLegend />
+              </>
+            )}
+          </main>
+          {agentId && <TimelineStrip />}
+        </div>
 
-        <InspectorPanel />
+        <InspectorPanel agentId={agentId} />
       </div>
     </div>
   );

@@ -55,6 +55,17 @@ export interface GraphNode {
   latency_ms: number | null;
   cost: number | null;
   reason: string | null;
+  // Not part of the backend's GraphNode wire shape (a TraceGraph's nodes
+  // don't repeat their own trace_id) — stamped on client-side from the
+  // owning TraceGraph.trace_id (loadSnapshot) or from the live message
+  // that produced/touched the node (applyLiveMessage, U15/v2). An agent
+  // can have more than one concurrent trace, so the inspector needs this
+  // to show/link the right one.
+  trace_id: string | null;
+  // Client-side receive timestamp, not a backend field — see
+  // store/graph.ts's TimelineEntry comment for why live messages don't
+  // carry a server timestamp today.
+  updated_at: number | null;
 }
 
 export interface GraphEdge {
@@ -126,10 +137,20 @@ export interface PolicyRuleMatch {
   database?: string;
 }
 
+// U6/U15 (v2 upgrade) — UPGRADE_ARCHITECTURE.md §8's stateful governance
+// dimensions, `docs/adr/ADR-015`.
+export interface PolicyLimits {
+  calls_per_minute?: number | null;
+  max_transaction_amount?: number | null;
+  org_spend_per_day?: number | null;
+  agent_llm_budget_per_hour?: number | null;
+}
+
 export interface PolicyRule {
   match: PolicyRuleMatch;
   action: "allow" | "block" | "require_approval";
   condition?: string;
+  limits?: PolicyLimits | null;
 }
 
 export interface Policy {
@@ -143,11 +164,39 @@ export interface Policy {
   created_at: string;
 }
 
-// WS /live/{agent_id} messages — realtime.py.
+// U15 (v2 upgrade) — Policy Studio's simulator, `docs/adr/ADR-020`.
+export interface SimulatePolicyResponse {
+  decision: "allow" | "block" | "require_approval";
+  reason: string | null;
+  policy_id: string | null;
+  policy_set_id: string | null;
+  matched_rule_tool: string | null;
+  configured_limits: PolicyLimits | null;
+}
+
+// U15 (v2 upgrade) — Policy Studio's propagation-status panel,
+// `docs/adr/ADR-020`. `known_interceptor_instances` is honestly always 1 —
+// see the ADR for why this deployment has no multi-replica registry.
+export interface PolicyPropagationResponse {
+  policy_set_id: string;
+  active_version: number;
+  active_policy_id: string;
+  this_instance_cached_version: number | null;
+  propagated: boolean;
+  known_interceptor_instances: number;
+}
+
+// WS /live/{agent_id} messages — realtime.py. trace_id added U15 (v2
+// upgrade) — see GraphNode's comment above for why.
 export type LiveMessage =
-  | { type: "node_added"; node: { span_id: string; tool_name: string; status: "pending" } }
+  | {
+      type: "node_added";
+      trace_id: string;
+      node: { span_id: string; tool_name: string; status: "pending" };
+    }
   | {
       type: "node_updated";
+      trace_id: string;
       span_id: string;
       status: Exclude<NodeStatus, "pending">;
       latency_ms?: number;

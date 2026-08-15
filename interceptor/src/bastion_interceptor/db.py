@@ -123,6 +123,17 @@ class Database:
         assert record is not None
         return record
 
+    async def get_agent_by_id(self, agent_id: UUID, org_id: UUID) -> asyncpg.Record | None:
+        """U15 (v2 upgrade): the Policy Studio simulator needs to resolve a
+        human-supplied agent_id to that agent's default_policy_set_id,
+        scoped to the caller's own org same as every other agent lookup."""
+        return await self.pool.fetchrow(
+            "SELECT id, org_id, name, default_policy_set_id, created_at "
+            "FROM agents WHERE id = $1 AND org_id = $2",
+            agent_id,
+            org_id,
+        )
+
     async def list_agents(self, org_id: UUID) -> list[asyncpg.Record]:
         """U8 (v2 upgrade): scoped via org_scoped_connection/RLS (migration
         0010) instead of an application-layer `WHERE org_id` filter —
@@ -373,6 +384,30 @@ class Database:
             await self.pool.fetch(
                 "SELECT * FROM policies WHERE org_id = $1 ORDER BY name, version", org_id
             ),
+        )
+
+    async def get_active_policy_for_set_in_org(
+        self, policy_set_id: UUID, org_id: UUID
+    ) -> asyncpg.Record | None:
+        """U15 (v2 upgrade): Policy Studio's propagation-status panel needs
+        the real currently-active version straight from Postgres — the
+        source of truth this instance's in-memory cache is compared
+        against, not a second cache read. Distinct from the org-agnostic
+        `get_active_policy_for_set` above (that one's callers already know
+        the policy_set_id is legitimate — the hot-reload pub/sub handler
+        and startup cache bootstrap); this one takes untrusted input from a
+        human caller, so it's org-scoped the same way every other
+        human-facing lookup in this file is."""
+        return await self.pool.fetchrow(
+            "SELECT * FROM policies WHERE policy_set_id = $1 AND org_id = $2 AND active = true",
+            policy_set_id,
+            org_id,
+        )
+
+    async def get_policy_version_by_id(self, policy_id: UUID) -> int | None:
+        return cast(
+            "int | None",
+            await self.pool.fetchval("SELECT version FROM policies WHERE id = $1", policy_id),
         )
 
     async def create_policy(
