@@ -36,7 +36,11 @@ export function ForceGraph() {
   const simNodesRef = useRef(new Map<string, SimNode>());
   const simulationRef = useRef<Simulation<SimNode> | null>(null);
   if (simulationRef.current === null) {
-    simulationRef.current = forceSimulation<SimNode>([])
+    // numDimensions=3 is not optional decoration — d3-force-3d defaults to
+    // **2** (see types/d3-force-3d.d.ts's comment on this exact bug): omit
+    // it and forceManyBody/forceLink silently never touch z at all, no
+    // matter how "3D" everything else here looks.
+    simulationRef.current = forceSimulation<SimNode>([], 3)
       .force(
         "charge",
         // distanceMin caps the repulsion at close range — without it, nodes

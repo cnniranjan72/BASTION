@@ -281,8 +281,19 @@ async def _call_ollama(
     try:
         response = await client.post(f"{base_url}/api/chat", json=body)
     except httpx.ConnectError as exc:
+        # Ollama is only ever reachable if it's running on the *same
+        # machine* as whatever process is making this call — a hosted
+        # deployment's OLLAMA_BASE_URL still defaults to its own
+        # localhost, which is never where a browser visitor's Ollama
+        # install actually is. Spelled out explicitly here since "could
+        # not reach localhost" reads as a local-dev message even when
+        # this call is happening on a remote server.
         raise LLMProviderError(
-            "ollama", 503, f"could not reach Ollama at {base_url} — is `ollama serve` running?"
+            "ollama",
+            503,
+            f"could not reach Ollama at {base_url} from this server — Ollama must be running on "
+            "the same machine as the BASTION backend making this call (`ollama serve`), which is "
+            "never true for a hosted deployment reached from your own browser",
         ) from exc
     _raise_for_provider_status("ollama", response)
     message = response.json()["message"]

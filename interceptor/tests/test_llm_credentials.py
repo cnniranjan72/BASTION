@@ -11,6 +11,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 
 import httpx
+import pytest
 from bastion_interceptor.main import app
 
 
@@ -116,3 +117,27 @@ async def test_unknown_provider_is_rejected(
             headers=_auth_headers(login),
         )
     assert create.status_code == 422
+
+
+async def test_missing_byok_master_key_is_a_clean_503_not_a_bare_500(
+    make_user: Callable[..., Awaitable[dict]],
+    login_as: Callable[[dict], Awaitable[dict]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A deployment that never configured BYOK_MASTER_KEY (the actual
+    production incident this test was added for — see PROGRESS.md) must
+    fail legibly, not with FastAPI's generic "Internal Server Error" and
+    no error code the frontend can act on."""
+    user = await make_user(role="viewer")
+    login = await login_as(user)
+    monkeypatch.delenv("BYOK_MASTER_KEY", raising=False)
+    monkeypatch.delenv("BYOK_MASTER_KEYS", raising=False)
+
+    async with _http_client() as http:
+        create = await http.post(
+            "/llm-keys",
+            json={"provider": "openai", "label": "x", "api_key": "sk-x"},
+            headers=_auth_headers(login),
+        )
+    assert create.status_code == 503
+    assert create.json()["error"]["code"] == "BYOK_NOT_CONFIGURED"

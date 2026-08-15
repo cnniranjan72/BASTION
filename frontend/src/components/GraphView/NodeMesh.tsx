@@ -28,7 +28,19 @@ export function NodeMesh({ spanId }: NodeMeshProps) {
     const simNode = simNodes.get(spanId);
     const mesh = meshRef.current;
     if (!simNode || !mesh) return;
-    mesh.position.set(simNode.x ?? 0, simNode.y ?? 0, simNode.z ?? 0);
+    const x = simNode.x ?? 0;
+    const y = simNode.y ?? 0;
+    const z = simNode.z ?? 0;
+    // Defensive, not decorative: a numerically unstable tick (the
+    // numDimensions bug this file's sibling ForceGraph.tsx documents was
+    // one real cause, but any future force-tuning mistake could produce
+    // another) leaves d3-force nodes permanently NaN — nothing in d3-force
+    // itself ever recovers from that on its own. Skipping the position
+    // write for one bad frame is a far better failure mode than a node
+    // silently vanishing forever because its mesh.position became NaN.
+    if (Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z)) {
+      mesh.position.set(x, y, z);
+    }
 
     if (node && isTransient(node.status)) {
       pulseRef.current += delta * 4;

@@ -78,6 +78,7 @@ from bastion_shared import (
     LLMRateLimitedError,
     LoginRequest,
     LogoutRequest,
+    MasterKeyNotConfigured,
     PolicyDecisionPayload,
     PolicyPropagationResponse,
     PolicyResponse,
@@ -265,6 +266,29 @@ async def validation_exception_handler(
     return JSONResponse(
         status_code=422,
         content=_error_body(request, "VALIDATION_ERROR", _format_validation_errors(exc)),
+    )
+
+
+@app.exception_handler(MasterKeyNotConfigured)
+async def master_key_not_configured_handler(
+    request: Request, exc: MasterKeyNotConfigured
+) -> JSONResponse:
+    # U17 follow-up: a deployment with BYOK_MASTER_KEY unset (or a rotated-
+    # away key version) previously bubbled this all the way up to FastAPI's
+    # generic 500 handler — a bare "Internal Server Error" with no way for
+    # a caller (or the frontend) to tell "this feature isn't configured
+    # here" apart from "the server is broken." A global handler, not a
+    # try/except at each of /llm-keys and /demo/live-run, so any future
+    # call site that touches encrypt_secret/decrypt_secret gets the same
+    # clean behavior for free.
+    log.warning("BYOK master key not configured or version missing", error=str(exc))
+    return JSONResponse(
+        status_code=503,
+        content=_error_body(
+            request,
+            "BYOK_NOT_CONFIGURED",
+            "this deployment has not configured LLM credential storage (BYOK_MASTER_KEY)",
+        ),
     )
 
 

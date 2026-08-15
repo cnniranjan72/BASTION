@@ -4,6 +4,21 @@
 // simulation's per-tick node mutation (x/y/z written in place) is
 // inherently untyped in d3-force's own design anyway, so a fuller typing
 // wouldn't buy much safety here.
+//
+// forceSimulation's `numDimensions` second parameter was missing from this
+// declaration entirely until this comment was added: the library's own
+// default (simulation.js: `numDimensions = numDimensions || 2`) is **2**,
+// not 3 — despite the package being named d3-force-3d. Omitting it here
+// meant ForceGraph.tsx's `forceSimulation<SimNode>([])` could never have
+// passed 3 even if it tried (TypeScript would reject the extra arg), so
+// the live/replay graph's physics silently ran in 2D the whole time —
+// forceManyBody built a quadtree instead of an octree, and neither it nor
+// forceLink ever touched z (see their nDim-gated branches in
+// node_modules/d3-force-3d/src/{manyBody,link}.js). Found while
+// investigating production reports of nodes rendering invisibly with
+// several concurrent live nodes present — a real, verified-from-source
+// bug in the simulation's dimensionality regardless of whether it's the
+// full explanation for that report.
 
 declare module "d3-force-3d" {
   export interface SimulationNodeDatum {
@@ -59,7 +74,10 @@ declare module "d3-force-3d" {
     strength(strength: number): this;
   }
 
-  export function forceSimulation<N extends SimulationNodeDatum>(nodes?: N[]): Simulation<N>;
+  export function forceSimulation<N extends SimulationNodeDatum>(
+    nodes?: N[],
+    numDimensions?: number,
+  ): Simulation<N>;
   export function forceManyBody<N extends SimulationNodeDatum>(): ForceManyBody<N>;
   export function forceLink<N extends SimulationNodeDatum, L extends SimulationLinkDatum<N>>(
     links?: L[],

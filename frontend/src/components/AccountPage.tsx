@@ -12,6 +12,16 @@ import type { ApiToken, LiveDemoRunResponse, LlmCredential, LlmProvider, TeamMem
 
 const LLM_PROVIDERS: LlmProvider[] = ["openai", "anthropic", "gemini"];
 
+// Ollama runs on whoever's machine started it — the interceptor can only
+// ever reach one running on the *same* machine it's deployed on. A
+// deployed (non-localhost) instance can never reach a visitor's laptop no
+// matter what they click; better to say so up front than let them hit a
+// confusing 502 per click. `window.location.hostname` (not the API base
+// URL) is the right signal — it's the browser's own address bar, which is
+// exactly "am I looking at a locally-run dev server or a real deployment."
+const IS_LOCAL_DEPLOYMENT =
+  window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
+
 export function AccountPage() {
   const { role, orgId, userId } = useAuthStore();
   const [profile, setProfile] = useState<TeamMember | null>(null);
@@ -38,7 +48,9 @@ export function AccountPage() {
   const [creatingLlmCredential, setCreatingLlmCredential] = useState(false);
   const [revokingLlmCredential, setRevokingLlmCredential] = useState<string | null>(null);
 
-  const [demoProvider, setDemoProvider] = useState<LlmProvider | "ollama">("ollama");
+  const [demoProvider, setDemoProvider] = useState<LlmProvider | "ollama">(
+    IS_LOCAL_DEPLOYMENT ? "ollama" : "openai",
+  );
   const [demoCredentialId, setDemoCredentialId] = useState<string>("");
   const [runningDemo, setRunningDemo] = useState(false);
   const [demoResult, setDemoResult] = useState<LiveDemoRunResponse | null>(null);
@@ -422,7 +434,9 @@ export function AccountPage() {
                 setDemoCredentialId("");
               }}
             >
-              <option value="ollama">ollama (local)</option>
+              <option value="ollama" disabled={!IS_LOCAL_DEPLOYMENT}>
+                ollama (local){!IS_LOCAL_DEPLOYMENT ? " — unavailable here" : ""}
+              </option>
               {LLM_PROVIDERS.map((p) => (
                 <option key={p} value={p}>
                   {p}
@@ -448,12 +462,22 @@ export function AccountPage() {
             <button
               onClick={handleRunLiveDemo}
               disabled={
-                runningDemo || (demoProvider !== "ollama" && credentialsForDemoProvider.length === 0)
+                runningDemo ||
+                (demoProvider === "ollama" && !IS_LOCAL_DEPLOYMENT) ||
+                (demoProvider !== "ollama" && credentialsForDemoProvider.length === 0)
               }
             >
               {runningDemo ? "Running…" : "Run live demo"}
             </button>
           </div>
+
+          {demoProvider === "ollama" && !IS_LOCAL_DEPLOYMENT && (
+            <p className="page__subtitle">
+              Ollama runs on your own machine — this deployed instance has no way to reach it, no
+              matter what you click here. Add a provider key above instead, or clone the repo and
+              run BASTION locally (see <Link to="/docs">Docs</Link>) to use Ollama for free.
+            </p>
+          )}
 
           {demoProvider !== "ollama" && credentialsForDemoProvider.length === 0 && (
             <p className="page__subtitle">Add a {demoProvider} key above first.</p>
