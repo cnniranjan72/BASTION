@@ -50,6 +50,26 @@ class RedisBus:
         payload = message.model_dump(mode="json", by_alias=True)
         await self._redis.publish(_channel(agent_id), json.dumps(payload))
 
+    async def agents_with_open_circuit_breaker(self) -> set[UUID]:
+        """U16 (v2 upgrade), Command Center's "agents healthy" count
+        (FRONTEND_V2.md, ADR-021) -- real state, not synthetic: reads the
+        same `bastion:breaker:{agent_id}:{tool_name}:state` keys
+        interceptor/circuit_breaker.py writes. Aggregator has no other
+        access to this (it's Redis-only, never persisted to Postgres), so
+        this reads the shared Redis directly rather than adding a new
+        cross-service API call for one gauge."""
+        if self._redis is None:
+            raise RuntimeError("RedisBus.connect() was not called")
+        open_agents: set[UUID] = set()
+        async for key in self._redis.scan_iter(match="bastion:breaker:*:state"):
+            value = await self._redis.get(key)
+            if value == "OPEN":
+                # bastion:breaker:{agent_id}:{tool_name}:state -- agent_id is
+                # always the segment right after the fixed "bastion:breaker:"
+                # prefix, regardless of whether tool_name itself contains ":".
+                open_agents.add(UUID(key.split(":")[2]))
+        return open_agents
+
     async def subscribe_live_messages(self, agent_id: UUID) -> AsyncIterator[LiveMessage]:
         """Runs until cancelled (the caller's own task, per-agent, ws.py's
         ConnectionManager) — cleans up its subscription on the way out

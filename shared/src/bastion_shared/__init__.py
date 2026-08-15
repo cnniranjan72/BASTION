@@ -8,6 +8,19 @@ plan — see docs/ARCHITECTURE.md §16 and docs/api/DRIFT.md.
 """
 
 from .agents_api import AgentResponse, CreateAgentRequest, CreateAgentResponse, UpdateAgentRequest
+from .analytics_api import (
+    AgentHealthResponse,
+    AnomalyFlag,
+    CommandCenterSnapshotResponse,
+    CostByAgent,
+    CostByTool,
+    CostSummaryResponse,
+    LiveActivityEntry,
+    PolicyViolationCount,
+    ThreatSummaryResponse,
+    ThreatTimelineBucket,
+    ToolCount,
+)
 from .api_tokens_api import ApiTokenResponse, CreateApiTokenRequest, CreateApiTokenResponse
 from .approvals import ApprovalRequestResponse, ApprovalStatus
 from .auth_api import (
@@ -74,6 +87,17 @@ from .users_api import CreateUserRequest, CreateUserResponse, UpdateUserRoleRequ
 
 __all__ = [
     "AgentResponse",
+    "AgentHealthResponse",
+    "AnomalyFlag",
+    "CommandCenterSnapshotResponse",
+    "CostByAgent",
+    "CostByTool",
+    "CostSummaryResponse",
+    "LiveActivityEntry",
+    "PolicyViolationCount",
+    "ThreatSummaryResponse",
+    "ThreatTimelineBucket",
+    "ToolCount",
     "TOOL_EVENTS_TOPIC",
     "kafka_client_kwargs",
     "TERMINAL_STATES",

@@ -34,16 +34,28 @@ import time
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
+from datetime import datetime
 from typing import Any
 from uuid import UUID
 
 import structlog
 from bastion_shared import (
+    AgentHealthResponse,
+    AnomalyFlag,
+    CommandCenterSnapshotResponse,
+    CostByAgent,
+    CostByTool,
+    CostSummaryResponse,
     EdgeAddedMessage,
     InvalidAccessToken,
+    LiveActivityEntry,
     LiveNode,
     NodeAddedMessage,
     NodeUpdatedMessage,
+    PolicyViolationCount,
+    ThreatSummaryResponse,
+    ThreatTimelineBucket,
+    ToolCount,
     TraceGraph,
     TraceSummaryResponse,
 )
@@ -418,10 +430,29 @@ async def get_trace_events(
 @app.get("/traces")
 async def list_traces(
     user: AuthenticatedUser = require_any_role,
+    agent_id: UUID | None = None,
+    status: str | None = None,
+    tool: str | None = None,
+    policy: str | None = None,
+    started_after: datetime | None = None,
+    started_before: datetime | None = None,
 ) -> list[TraceSummaryResponse]:
     """Persisted (terminal-state) traces only — an in-progress trace has no
-    trace_summaries row yet by design (docs/ARCHITECTURE.md §14)."""
-    records = await db.list_trace_summaries(user.org_id)
+    trace_summaries row yet by design (docs/ARCHITECTURE.md §14).
+
+    U16 (v2 upgrade), Trace Explorer: agent_id/status/tool/policy/
+    started_after/started_before were "not implemented yet" per
+    API_SPEC.md until now — see db.list_trace_summaries for how each one
+    actually queries."""
+    records = await db.list_trace_summaries(
+        user.org_id,
+        agent_id=agent_id,
+        status=status,
+        tool_name=tool,
+        policy_name=policy,
+        started_after=started_after,
+        started_before=started_before,
+    )
     return [
         TraceSummaryResponse(
             trace_id=r["trace_id"],
@@ -435,6 +466,200 @@ async def list_traces(
         )
         for r in records
     ]
+
+
+@app.get("/threats")
+async def get_threats(
+    user: AuthenticatedUser = require_any_role,
+    window_days: int = 30,
+) -> ThreatSummaryResponse:
+    """U16 (v2 upgrade), Threat Center. See docs/adr/ADR-021: "threats"
+    means blocked calls -- no separate prompt-injection detector exists."""
+    summary = await db.get_threat_summary(user.org_id, window_days=window_days)
+    return ThreatSummaryResponse(
+        window_days=window_days,
+        blocked_calls_total=summary["blocked_total"],
+        top_violated_policies=[
+            PolicyViolationCount(
+                policy_id=r["policy_id"], policy_name=r["policy_name"], block_count=r["block_count"]
+            )
+            for r in summary["top_policies"]
+        ],
+        timeline=[
+            ThreatTimelineBucket(day=r["day"], blocked_count=r["blocked_count"])
+            for r in summary["timeline"]
+        ],
+    )
+
+
+@app.get("/agents/{agent_id}/health")
+async def get_agent_health(
+    agent_id: UUID,
+    request: Request,
+    user: AuthenticatedUser = require_any_role,
+    window_days: int = 30,
+) -> AgentHealthResponse:
+    """U16 (v2 upgrade), Agent Health. Score formula and anomaly-detection
+    baseline are both real computed aggregates -- see docs/adr/ADR-021 for
+    the exact definitions and why those weights."""
+    org_id = await db.get_org_id_for_agent(agent_id)
+    if org_id is None or org_id != user.org_id:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": {
+                    "code": "AGENT_NOT_FOUND",
+                    "message": f"no agent {agent_id}",
+                    "request_id": request.state.request_id,
+                }
+            },
+        )
+
+    agent_name = await db.get_agent_name(agent_id)
+    assert agent_name is not None
+    stats = await db.get_agent_stats(agent_id, window_days=window_days)
+    top_tools = await db.get_agent_top_tools(agent_id, window_days=window_days)
+    trend = await db.get_agent_call_rate_trend(agent_id)
+
+    calls_total = stats["calls_total"] or 0
+    blocked_total = stats["blocked_total"] or 0
+    failed_total = stats["failed_total"] or 0
+    pending_approval_total = stats["pending_approval_total"] or 0
+    completed_total = calls_total - blocked_total - failed_total - pending_approval_total
+    reliability = (
+        completed_total / (completed_total + failed_total)
+        if (completed_total + failed_total)
+        else 1.0
+    )
+    policy_compliance = 1 - (blocked_total / calls_total) if calls_total else 1.0
+    tool_error_rate = failed_total / calls_total if calls_total else 0.0
+    approval_rate = pending_approval_total / calls_total if calls_total else 0.0
+
+    org_avg_cost = await db.pool.fetchval(
+        """
+        SELECT AVG((e.payload->>'cost')::numeric)
+        FROM events e JOIN agents a ON a.id = e.agent_id
+        WHERE a.org_id = $1 AND e.event_type = 'CallCompleted'
+          AND e.created_at >= now() - make_interval(days => $2)
+        """,
+        user.org_id,
+        window_days,
+    )
+    agent_avg_cost = (
+        float(stats["estimated_cost_total"]) / completed_total if completed_total else None
+    )
+    cost_efficiency = (
+        min(float(org_avg_cost) / agent_avg_cost, 1.5) / 1.5
+        if org_avg_cost and agent_avg_cost
+        else 1.0
+    )
+
+    health_score = 100 * (
+        (reliability + policy_compliance + (1 - tool_error_rate) + cost_efficiency) / 4
+    )
+
+    anomalies: list[AnomalyFlag] = []
+    last_24h = trend["last_24h"] or 0
+    prior_7d = trend["prior_7d"] or 0
+    baseline_daily_avg = prior_7d / 7
+    if baseline_daily_avg > 0 and last_24h / baseline_daily_avg >= 2.0:
+        ratio = last_24h / baseline_daily_avg
+        anomalies.append(
+            AnomalyFlag(
+                description=f"tool-call frequency increased {ratio:.1f}× over baseline "
+                f"({last_24h} calls in the last 24h vs. a {baseline_daily_avg:.1f}/day average "
+                "over the preceding 7 days)"
+            )
+        )
+
+    return AgentHealthResponse(
+        agent_id=agent_id,
+        agent_name=agent_name,
+        window_days=window_days,
+        calls_total=calls_total,
+        blocked_total=blocked_total,
+        failed_total=failed_total,
+        pending_approval_total=pending_approval_total,
+        avg_latency_ms=float(stats["avg_latency_ms"])
+        if stats["avg_latency_ms"] is not None
+        else None,
+        estimated_cost_total=float(stats["estimated_cost_total"]),
+        top_tools=[ToolCount(tool_name=r["tool_name"], count=r["count"]) for r in top_tools],
+        health_score=round(health_score, 1),
+        reliability=round(reliability, 3),
+        policy_compliance=round(policy_compliance, 3),
+        tool_error_rate=round(tool_error_rate, 3),
+        approval_rate=round(approval_rate, 3),
+        anomalies=anomalies,
+    )
+
+
+@app.get("/costs")
+async def get_costs(
+    user: AuthenticatedUser = require_any_role,
+    window_days: int = 30,
+) -> CostSummaryResponse:
+    """U16 (v2 upgrade), Cost Center. "Estimated savings" is a real estimate
+    built from this org's own historical cost data -- see docs/adr/ADR-021,
+    never a fabricated number."""
+    by_agent = await db.get_cost_by_agent(user.org_id, window_days=window_days)
+    by_tool = await db.get_cost_by_tool(user.org_id, window_days=window_days)
+    savings = await db.get_estimated_savings_from_policy_enforcement(
+        user.org_id, window_days=window_days
+    )
+    total_cost = sum(float(r["cost"]) for r in by_agent)
+    return CostSummaryResponse(
+        window_days=window_days,
+        total_cost=total_cost,
+        by_agent=[
+            CostByAgent(agent_id=r["agent_id"], agent_name=r["agent_name"], cost=float(r["cost"]))
+            for r in by_agent
+        ],
+        by_tool=[CostByTool(tool_name=r["tool_name"], cost=float(r["cost"])) for r in by_tool],
+        estimated_savings_from_policy_enforcement=savings,
+    )
+
+
+@app.get("/command-center")
+async def get_command_center_snapshot(
+    user: AuthenticatedUser = require_any_role,
+    window_days: int = 1,
+) -> CommandCenterSnapshotResponse:
+    """U16 (v2 upgrade), Command Center. "Availability" and "agents
+    healthy" are both redefined to something this system actually tracks
+    honestly -- see docs/adr/ADR-021. Polled by the frontend rather than
+    pushed over a new WS channel -- the existing WS fan-out (ws.py) is
+    scoped per-agent, and building a new org-wide broadcast channel for
+    this one snapshot is real, separate scope, not attempted here."""
+    agents = await db.list_agents_for_org(user.org_id)
+    open_breaker_agents = await redis_bus.agents_with_open_circuit_breaker()
+    agents_healthy = sum(1 for a in agents if a["id"] not in open_breaker_agents)
+
+    availability = await db.get_availability_stats(user.org_id, window_days=window_days)
+    completed = availability["completed"] or 0
+    failed = availability["failed"] or 0
+    availability_pct = 100 * completed / (completed + failed) if (completed + failed) else 100.0
+
+    last_incident_at = await db.get_last_incident_at(user.org_id)
+    recent = await db.get_recent_activity(user.org_id, limit=15)
+
+    return CommandCenterSnapshotResponse(
+        agents_total=len(agents),
+        agents_healthy=agents_healthy,
+        availability_pct=round(availability_pct, 2),
+        window_days=window_days,
+        last_incident_at=last_incident_at,
+        recent_activity=[
+            LiveActivityEntry(
+                agent_id=r["agent_id"],
+                agent_name=r["agent_name"],
+                tool_name=r["tool_name"] or "unknown",
+                decision=r["decision"],
+                at=r["at"],
+            )
+            for r in recent
+        ],
+    )
 
 
 def run() -> None:

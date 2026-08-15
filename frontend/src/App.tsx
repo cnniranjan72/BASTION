@@ -4,11 +4,14 @@ import { SignupPage } from "./components/SignupPage";
 import { OverviewPage } from "./components/OverviewPage";
 import { Dashboard } from "./components/Dashboard";
 import { AgentsPage } from "./components/AgentsPage";
+import { AgentHealthPage } from "./components/AgentHealthPage";
 import { PoliciesPage } from "./components/PoliciesPage";
 import { ApprovalsPage } from "./components/ApprovalsPage";
 import { TeamPage } from "./components/TeamPage";
 import { TracesPage } from "./components/TracesPage";
 import { AnalyticsPage } from "./components/AnalyticsPage";
+import { ThreatCenterPage } from "./components/ThreatCenterPage";
+import { CostCenterPage } from "./components/CostCenterPage";
 import { AccountPage } from "./components/AccountPage";
 import { ToastHost } from "./components/ToastHost";
 import { CommandPalette } from "./components/CommandPalette";
@@ -51,6 +54,30 @@ export function App() {
           element={
             <RequireAuth>
               <AgentsPage />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/agents/:agentId/health"
+          element={
+            <RequireAuth>
+              <AgentHealthPage />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/threats"
+          element={
+            <RequireAuth>
+              <ThreatCenterPage />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/costs"
+          element={
+            <RequireAuth>
+              <CostCenterPage />
             </RequireAuth>
           }
         />

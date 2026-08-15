@@ -5,7 +5,7 @@ attempts — an HTTP request, a database mutation, a payment — is intercepted,
 allowed/blocked/escalated, and recorded as an immutable event, giving teams real-time prevention (not
 just after-the-fact logging) and a full causal replay of what an agent actually did.
 
-**Status: v1 (Phases 0-9) plus v2 upgrade phases U1 through U15 all done, and actually running in
+**Status: v1 (Phases 0-9) plus v2 upgrade phases U1 through U16 all done, and actually running in
 production** — not just pushed to GitHub; see "Deploying this for real" below for what that took. See
 `docs/PROGRESS.md` for the phase-by-phase build log and every design decision made along the way, or
 `docs/decisions.md` for the same decisions as a scannable index.
@@ -460,19 +460,28 @@ Promoting a second owner first, then demoting the original, still works.
 
 ## Product surface
 
-Eleven pages, each backed by real endpoints — not a mockup of a bigger product — plus a ⌘K command
-palette for jumping to any of them, an agent, or a recent trace without touching the mouse. U15 rebuilt
-three of these to a real, backend-verified v2 standard (flagged below); the other eight are still v1,
-left unmodified rather than half-replaced — see `docs/PROGRESS.md`'s U15 entry for the explicit scoping
-call behind that split.
+Fourteen pages, each backed by real endpoints — not a mockup of a bigger product — plus a ⌘K command
+palette with real actions (jump to any page/agent/trace, show blocked calls, show pending approvals,
+replay the last incident, create a policy) for navigating without touching the mouse. U15 built the 3
+flagship experiences; U16 built the remaining 7 supporting surfaces from `FRONTEND_V2.md` plus the
+command palette upgrade and the grouped nav (`Operate` / `Control` / `Security` / `Analyze` / `Admin`)
+below. Every number on every screen traces back to a real query — the handful of places U16's own spec
+text isn't literally something this system tracks (e.g. "99.97% availability") got a real, explicitly
+documented substitute instead of a silent guess: `docs/adr/ADR-021`.
 
-- **Overview** (`/`) — agent/policy/approval/cost counts at a glance (count up on load), recent traces,
-  and an explicit "create an agent → write a policy → watch it live" checklist for a brand-new org
-  instead of a wall of zeroes.
+- **Command Center** (`/`, v2/U16) — a live snapshot strip (agents healthy, real call-success rate, last
+  incident — polled every 5s, `docs/adr/ADR-021`), agent/policy/approval/cost counts, a live agent
+  activity feed, and an explicit "create an agent → write a policy → watch it live" checklist for a
+  brand-new org instead of a wall of zeroes.
 - **Live Execution Graph** (`/graph`, v2/U15) — the live/replayed 3D execution graph, a client-receive-
   timestamped timeline strip, and a 2D inspector (agent/trace ids, a "Why?" section) over real WebSocket
   fan-out with reconnect-with-backoff — a dropped connection recovers full current state via the
   server's resync burst, not just a dead view.
+- **Trace Explorer** (`/traces`, v2/U16) — Jaeger/Datadog-style search over every recorded trace: real
+  server-side `GET /traces` filters by agent, status, tool (free text with autocomplete — most tools are
+  only ever reached through a policy's wildcard rule, never named explicitly, so a dropdown restricted to
+  named tools silently missed real ones; caught and fixed during browser verification), policy, and time
+  range. One click into full replay.
 - **Policy Studio** (`/policy-studio`, v2/U15) — a structured WHEN/IF/THEN rule builder compiling to the
   same `PolicyRule[]` shape `POST /policies` already accepts (not a JSON textarea — that's still
   `/policies` below), a simulator that runs a hypothetical call through the *real* policy engine
@@ -482,18 +491,33 @@ call behind that split.
   fleet count).
 - **Incident Replay** (`/replay/:traceId`, v2/U15) — a direct TypeScript port of the backend's own
   `fold_events_to_graph` re-folds a prefix of the real event log at every scrub/play step, through the
-  *same* rendering path the live view uses — no parallel replay-data storage. Reachable via a `?trace=
-  {id}` deep link from Traces.
-- **Traces** (`/traces`) — every recorded trace, searchable by trace ID or agent, filterable by status
-  and agent, one click into full replay.
+  *same* rendering path the live view uses — no parallel replay-data storage. Reachable via Trace
+  Explorer, Approval Center, or the command palette's "replay last incident."
+- **Approval Center** (`/approvals`, v2/U16) — calls a policy routed to a human, framed as an incident
+  queue: each pending approval fetches its real trace graph and shows the pending call's actual
+  tool/args/reason plus the real prior calls in that trace — the causal context leading up to it, not
+  just a bare `trace_id`/`span_id` row.
+- **Threat Center** (`/threats`, v2/U16) — blocked-call counts, top violated policies, and a daily
+  timeline, all real `GET /threats` aggregates. "Threats" means blocked calls specifically — no separate
+  prompt-injection detector exists in this codebase, and this never claims to be one (`ADR-021`).
+- **Agent Health** (`/agents/:id/health`, v2/U16) — per-agent call volume, cost, top tools, and a
+  composite 0-100 health score with 4 real, individually-shown inputs (reliability, policy compliance,
+  tool error rate, approval rate) plus baseline-comparison anomaly flags (this agent's own trailing 7-day
+  average vs. its last 24h) — the exact formula and weights are a decision, documented in `ADR-021`, not
+  left implicit.
+- **Cost Center** (`/costs`, v2/U16) — real spend by agent and by tool, plus an estimated-savings figure
+  for what policy enforcement stopped from being spent (this org's own real avg cost per agent+tool ×
+  that pair's blocked-call count — an estimate by construction, since a blocked call never runs and so
+  never has a real recorded cost).
 - **Analytics** (`/analytics`) — calls and cost per day, a block-rate gauge, and top agents by call
-  volume, computed client-side from the same data Overview and Traces already fetch — no separate
-  aggregation backend.
-- **Agents** (`/agents`) — create an agent, see its API key exactly once, assign or reassign a policy.
+  volume, computed client-side from the same data Command Center and Trace Explorer already fetch — no
+  separate aggregation backend (distinct from Cost Center/Agent Health above, which are real backend
+  aggregates).
+- **Agents** (`/agents`) — create an agent, see its API key exactly once, assign or reassign a policy,
+  jump to its real Agent Health.
 - **Policies** (`/policies`) — v1's JSON-textarea policy editor: version history per policy, activate a
   version (hot-reloads every running interceptor, no restart). Kept alongside Policy Studio above, not
   replaced by it.
-- **Approvals** (`/approvals`) — the inbox for calls routed to a human, with Approve/Deny.
 - **Team** (`/team`) — see everyone in your org, provision a teammate with a role (a one-time temporary
   password, not an email invite — no email infrastructure exists in this project, and pretending
   otherwise would be worse than not having the feature), change anyone's role.
@@ -501,10 +525,11 @@ call behind that split.
   tokens (`bstn_pat_...`) for calling this same API from a script or CI job without an interactive
   login — a third auth credential alongside agent keys and JWT sessions, scoped to you, not your org.
 
-**Deliberately deferred, not started**: Command Center, Trace Explorer, Approval Center, Threat Center,
-Agent Health, Cost Center, and a cross-screen command palette upgrade — `FRONTEND_V2.md`'s full scope,
-explicitly agreed as its own future phase (U16+) before U15 started, rather than attempted shallowly
-alongside the three flagships above.
+**Deliberately not built, stated explicitly**: a standalone "Incidents" index page and a separate "Audit
+Log" screen (both named in `FRONTEND_V2.md`'s nav sketch) — Incident Replay is reached via Trace Explorer
+or Approval Center, not a separate incidents catalog, and the real audit trail is the event log, already
+reachable per-trace; a standalone index/log screen for either is real, separate scope, not a nav link to
+nothing.
 
 ## Repo layout
 
@@ -590,7 +615,7 @@ runs, and `aggregator/tests/conftest.py` drives the actual outbox → Kafka → 
 |---|---|
 | `shared/tests` | Event payloads; the call-state machine (`guard_event` / `state_for_event`) |
 | `interceptor/tests` | Auth + RBAC, the authorization chain, policy engine + reconciliation + hot reload, approval flow, API tokens, agents, users, idempotency, causal ordering, circuit breaker + limits, outbox resumability, object storage, row-level security, retention, health |
-| `aggregator/tests` | Kafka resumability (manual offset commit), WS fan-out + per-span delta coalescing, replay, the observability milestone (Jaeger REST query), health |
+| `aggregator/tests` | Kafka resumability (manual offset commit), WS fan-out + per-span delta coalescing, replay, the observability milestone (Jaeger REST query), health, U16's 5 analytics endpoints + trace filters against real policy-generated events |
 | `aggregator/tests/chaos` | Real-infra outage drills against the docker-compose stack only (`docker stop`/`start` on `bastion-kafka`, `bastion-redis`, …) — deliberately **not** run in CI |
 | `sdk-python/tests` | `/intercept` semantics end to end through `httpx.ASGITransport` |
 | `demo-agent/tests` | The injected transfer is blocked reliably 20/20 times; the legitimate under-threshold refund goes through |

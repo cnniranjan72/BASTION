@@ -461,6 +461,23 @@ a {
 .topbar__nav-divider {
   display: none;
 }
+/* U16 (v2 upgrade): grouped nav (Operate/Control/Security/Analyze/Admin).
+   Desktop: groups stay inline, separated by a thin divider; the group
+   label itself is hidden here to keep the bar dense -- shown only in the
+   mobile dropdown below, where there's vertical room for it. */
+.topbar__nav-group {
+  display: flex;
+  align-items: center;
+  gap: 0.2rem;
+}
+.topbar__nav-group:not(:first-child) {
+  padding-left: 0.5rem;
+  margin-left: 0.3rem;
+  border-left: 1px solid var(--border);
+}
+.topbar__nav-group-label {
+  display: none;
+}
 .topbar__spacer {
   flex: 1;
 }
@@ -1322,6 +1339,9 @@ a {
 .filter-bar select {
   min-width: 150px;
 }
+.filter-bar__tool {
+  min-width: 200px;
+}
 .filter-bar__count {
   margin-left: auto;
   font-size: 0.8rem;
@@ -1750,6 +1770,27 @@ a {
     background: var(--border);
     margin: 0.4rem 0;
   }
+  .topbar__nav-group {
+    flex-direction: column;
+    align-items: stretch;
+    width: 100%;
+  }
+  .topbar__nav-group:not(:first-child) {
+    padding-left: 0;
+    margin-left: 0;
+    border-left: none;
+    border-top: 1px solid var(--border);
+    padding-top: 0.4rem;
+    margin-top: 0.3rem;
+  }
+  .topbar__nav-group-label {
+    display: block;
+    padding: 0.3rem 0.7rem 0.1rem;
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-faint);
+  }
   .topbar__user--mobile {
     display: flex;
     align-items: center;
@@ -2007,4 +2048,165 @@ a {
 }
 .propagation-status--pending .propagation-status__dot {
   background: var(--warning);
+}
+
+/* U16 (v2 upgrade): Command Center's live snapshot strip, ADR-021. */
+.command-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.5rem;
+  padding: 0.7rem 1.1rem;
+  margin-bottom: 1.5rem;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  font-size: 0.82rem;
+  color: var(--text-dim);
+}
+.command-strip__item {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.command-strip__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--success);
+  flex-shrink: 0;
+}
+.command-strip__item--warning .command-strip__dot {
+  background: var(--warning);
+}
+
+/* U16 (v2 upgrade): Threat Center's daily blocked-call bar chart. */
+.threat-timeline {
+  margin-bottom: 2rem;
+}
+.threat-timeline h2 {
+  margin: 0 0 0.9rem;
+  font-size: 1.1rem;
+}
+.threat-timeline__chart {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.4rem;
+  height: 140px;
+  padding: 0.5rem;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+.threat-timeline__bar-wrap {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  height: 100%;
+  gap: 0.3rem;
+}
+.threat-timeline__bar {
+  width: 100%;
+  min-height: 3px;
+  background: var(--danger);
+  border-radius: 3px 3px 0 0;
+  opacity: 0.85;
+}
+.threat-timeline__count {
+  font-size: 0.7rem;
+  color: var(--text-faint);
+}
+
+/* U16 (v2 upgrade): Agent Health's score card variants, ADR-021. */
+.stat-card--score-good .stat-card__value {
+  color: var(--success);
+}
+.stat-card--score-warning .stat-card__value {
+  color: var(--warning);
+}
+.stat-card--score-danger .stat-card__value {
+  color: var(--danger);
+}
+
+/* U16 (v2 upgrade): Approval Center's incident-queue cards, replacing a
+   plain table -- each shows the causal trace leading up to the decision. */
+.approval-queue {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.approval-card {
+  background: var(--bg-panel);
+  border: 1px solid var(--warning);
+  border-radius: var(--radius-md);
+  padding: 1.1rem 1.3rem;
+  animation: slide-up var(--duration) var(--ease) backwards;
+}
+.approval-card__header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.4rem;
+}
+.approval-card__tool {
+  font-family: var(--font-mono);
+  font-size: 1.05rem;
+  font-weight: 600;
+}
+.approval-card__requested {
+  font-size: 0.75rem;
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+.approval-card__reason {
+  margin: 0 0 0.6rem;
+  color: var(--text-dim);
+  font-size: 0.85rem;
+}
+.approval-card__args {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.6rem 0.8rem;
+  font-size: 0.78rem;
+  max-height: 140px;
+  overflow: auto;
+  margin: 0 0 0.6rem;
+}
+.approval-card__causal {
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  margin-bottom: 0.7rem;
+}
+.approval-card__causal-label {
+  display: block;
+  margin-bottom: 0.3rem;
+  color: var(--text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 0.7rem;
+}
+.approval-card__causal ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+.approval-card__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding-top: 0.6rem;
+  border-top: 1px solid var(--border);
+}
+.approval-card__link {
+  font-size: 0.8rem;
 }

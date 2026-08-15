@@ -208,3 +208,100 @@ export type LiveMessage =
 export interface ErrorResponse {
   error: { code: string; message: string; request_id: string };
 }
+
+// U16 (v2 upgrade) — the 4 new analytics endpoints, `docs/adr/ADR-021`.
+// Every field is a real aggregate; ADR-021 documents the handful of places
+// FRONTEND_V2.md's own mock text isn't literally something this system
+// tracks (e.g. "availability" = real call-success rate, not infra uptime).
+
+export interface PolicyViolationCount {
+  policy_id: string;
+  policy_name: string;
+  block_count: number;
+}
+
+export interface ThreatTimelineBucket {
+  day: string;
+  blocked_count: number;
+}
+
+export interface ThreatSummary {
+  window_days: number;
+  blocked_calls_total: number;
+  top_violated_policies: PolicyViolationCount[];
+  timeline: ThreatTimelineBucket[];
+}
+
+export interface ToolCount {
+  tool_name: string;
+  count: number;
+}
+
+export interface AnomalyFlag {
+  description: string;
+}
+
+export interface AgentHealth {
+  agent_id: string;
+  agent_name: string;
+  window_days: number;
+  calls_total: number;
+  blocked_total: number;
+  failed_total: number;
+  pending_approval_total: number;
+  avg_latency_ms: number | null;
+  estimated_cost_total: number;
+  top_tools: ToolCount[];
+  health_score: number;
+  reliability: number;
+  policy_compliance: number;
+  tool_error_rate: number;
+  approval_rate: number;
+  anomalies: AnomalyFlag[];
+}
+
+export interface CostByAgent {
+  agent_id: string;
+  agent_name: string;
+  cost: number;
+}
+
+export interface CostByTool {
+  tool_name: string;
+  cost: number;
+}
+
+export interface CostSummary {
+  window_days: number;
+  total_cost: number;
+  by_agent: CostByAgent[];
+  by_tool: CostByTool[];
+  estimated_savings_from_policy_enforcement: number;
+}
+
+export interface LiveActivityEntry {
+  agent_id: string;
+  agent_name: string;
+  tool_name: string;
+  decision: string;
+  at: string;
+}
+
+export interface CommandCenterSnapshot {
+  agents_total: number;
+  agents_healthy: number;
+  availability_pct: number;
+  window_days: number;
+  last_incident_at: string | null;
+  recent_activity: LiveActivityEntry[];
+}
+
+// U16 (v2 upgrade) — Trace Explorer's GET /traces filters.
+export interface TraceFilters {
+  agent_id?: string;
+  status?: TraceStatus;
+  tool?: string;
+  policy?: string;
+  started_after?: string;
+  started_before?: string;
+}

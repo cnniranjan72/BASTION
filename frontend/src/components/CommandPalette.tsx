@@ -15,13 +15,16 @@ interface Command {
 }
 
 const PAGES: Array<{ label: string; to: string; hint: string }> = [
-  { label: "Overview", to: "/", hint: "Org summary and onboarding" },
-  { label: "Graph", to: "/graph", hint: "Live / replayed 3D execution graph" },
-  { label: "Traces", to: "/traces", hint: "Search every recorded trace" },
-  { label: "Analytics", to: "/analytics", hint: "Call volume, cost, block rate" },
+  { label: "Command Center", to: "/", hint: "Org summary and live snapshot" },
+  { label: "Live", to: "/graph", hint: "Live / replayed 3D execution graph" },
+  { label: "Trace Explorer", to: "/traces", hint: "Search every recorded trace" },
+  { label: "Approval Center", to: "/approvals", hint: "Calls waiting on a human" },
   { label: "Agents", to: "/agents", hint: "API keys and policy assignment" },
   { label: "Policies", to: "/policies", hint: "Versioned policy definitions" },
-  { label: "Approvals", to: "/approvals", hint: "Calls waiting on a human" },
+  { label: "Policy Simulator", to: "/policy-studio", hint: "Build, simulate, diff policies" },
+  { label: "Threat Center", to: "/threats", hint: "Blocked calls and violated policies" },
+  { label: "Analytics", to: "/analytics", hint: "Call volume, cost, block rate" },
+  { label: "Cost Center", to: "/costs", hint: "Spend by agent and tool" },
   { label: "Team", to: "/team", hint: "Teammates and roles" },
   { label: "Account", to: "/account", hint: "Profile, password, API tokens" },
 ];
@@ -59,7 +62,7 @@ export function CommandPalette() {
     Promise.all([api.listAgents(), api.listTraces()])
       .then(([a, t]) => {
         setAgents(a);
-        setTraces(t.slice(0, 8));
+        setTraces(t);
       })
       .catch(() => {
         // Best-effort — the palette still works for static page nav if this fails.
@@ -68,7 +71,53 @@ export function CommandPalette() {
 
   if (!accessToken) return null;
 
+  // U16 (v2 upgrade), FRONTEND_V2.md's command palette spec: "show blocked
+  // calls, show pending approvals, replay last incident, create a policy —
+  // all real navigation/actions, not a static list." lastIncident is a
+  // real computation over the traces already fetched above (newest
+  // had_blocks or failed trace), not a hardcoded link.
+  const lastIncident = traces
+    .filter((t) => t.status === "had_blocks" || t.status === "failed")
+    .sort((a, b) => new Date(b.started_at).getTime() - new Date(a.started_at).getTime())[0];
+  const blockedTraceCount = traces.filter((t) => t.blocked_calls > 0).length;
+
+  const actions: Command[] = [
+    {
+      id: "action:blocked-calls",
+      label: "Show blocked calls",
+      hint: `${blockedTraceCount} trace${blockedTraceCount === 1 ? "" : "s"} with a block`,
+      group: "Actions",
+      action: () => navigate("/traces?status=had_blocks"),
+    },
+    {
+      id: "action:pending-approvals",
+      label: "Show pending approvals",
+      hint: "Jump to the Approval Center",
+      group: "Actions",
+      action: () => navigate("/approvals"),
+    },
+    {
+      id: "action:create-policy",
+      label: "Create a policy",
+      hint: "Open Policy Simulator's rule builder",
+      group: "Actions",
+      action: () => navigate("/policy-studio"),
+    },
+    ...(lastIncident
+      ? [
+          {
+            id: "action:replay-last-incident",
+            label: "Replay last incident",
+            hint: `${TRACE_STATUS_LABEL[lastIncident.status]} · ${new Date(lastIncident.started_at).toLocaleString()}`,
+            group: "Actions",
+            action: () => navigate(`/replay/${lastIncident.trace_id}`),
+          },
+        ]
+      : []),
+  ];
+
   const commands: Command[] = [
+    ...actions,
     ...PAGES.map((p) => ({
       id: `page:${p.to}`,
       label: p.label,
@@ -83,12 +132,12 @@ export function CommandPalette() {
       group: "Agents",
       action: () => navigate("/agents"),
     })),
-    ...traces.map((t) => ({
+    ...traces.slice(0, 8).map((t) => ({
       id: `trace:${t.trace_id}`,
       label: `Trace ${t.trace_id.slice(0, 8)}`,
       hint: `${TRACE_STATUS_LABEL[t.status]} · ${t.total_calls} calls${t.blocked_calls ? ` · ${t.blocked_calls} blocked` : ""}`,
       group: "Recent traces",
-      action: () => navigate(`/graph?trace=${t.trace_id}`),
+      action: () => navigate(`/replay/${t.trace_id}`),
     })),
   ];
 

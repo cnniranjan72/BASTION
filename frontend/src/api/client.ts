@@ -1,8 +1,11 @@
 import { useAuthStore } from "../store/auth";
 import type {
   Agent,
+  AgentHealth,
   ApiToken,
   ApprovalRequest,
+  CommandCenterSnapshot,
+  CostSummary,
   CreateAgentResponse,
   CreateApiTokenResponse,
   CreateUserResponse,
@@ -12,7 +15,9 @@ import type {
   RawEvent,
   SimulatePolicyResponse,
   TeamMember,
+  ThreatSummary,
   TokenPairResponse,
+  TraceFilters,
   TraceGraph,
   TraceSummary,
   UserRole,
@@ -179,10 +184,32 @@ export const api = {
   deny: (id: string) =>
     request<ApprovalRequest>(INTERCEPTOR_BASE, `/approvals/${id}/deny`, { method: "POST" }),
 
-  listTraces: () => request<TraceSummary[]>(AGGREGATOR_BASE, "/traces"),
+  // U16 (v2 upgrade): filters are all optional and combinable, `docs/adr/ADR-021`.
+  listTraces: (filters?: TraceFilters) => {
+    const params = new URLSearchParams();
+    for (const [key, value] of Object.entries(filters ?? {})) {
+      if (value) params.set(key, value);
+    }
+    const query = params.toString();
+    return request<TraceSummary[]>(AGGREGATOR_BASE, `/traces${query ? `?${query}` : ""}`);
+  },
   getTrace: (traceId: string) => request<TraceGraph>(AGGREGATOR_BASE, `/traces/${traceId}`),
   getTraceEvents: (traceId: string) =>
     request<RawEvent[]>(AGGREGATOR_BASE, `/traces/${traceId}/events`),
+
+  // U16 (v2 upgrade) — Threat Center / Agent Health / Cost Center / Command
+  // Center, `docs/adr/ADR-021`.
+  getThreats: (windowDays = 30) =>
+    request<ThreatSummary>(AGGREGATOR_BASE, `/threats?window_days=${windowDays}`),
+  getAgentHealth: (agentId: string, windowDays = 30) =>
+    request<AgentHealth>(AGGREGATOR_BASE, `/agents/${agentId}/health?window_days=${windowDays}`),
+  getCosts: (windowDays = 30) =>
+    request<CostSummary>(AGGREGATOR_BASE, `/costs?window_days=${windowDays}`),
+  getCommandCenterSnapshot: (windowDays = 1) =>
+    request<CommandCenterSnapshot>(
+      AGGREGATOR_BASE,
+      `/command-center?window_days=${windowDays}`,
+    ),
 };
 
 export function liveWebSocketUrl(agentId: string): string {

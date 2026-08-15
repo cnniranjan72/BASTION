@@ -7,7 +7,7 @@ import { useCountUp } from "../hooks/useCountUp";
 import { TRACE_STATUS_LABEL } from "../lib/labels";
 import { AgentsIcon, AlertIcon, AnalyticsIcon, ApprovalsIcon, GraphIcon, PoliciesIcon } from "./icons";
 import { TopBar } from "./TopBar";
-import type { Agent, ApprovalRequest, TraceSummary } from "../api/types";
+import type { Agent, ApprovalRequest, CommandCenterSnapshot, TraceSummary } from "../api/types";
 
 interface Stats {
   agents: Agent[];
@@ -41,9 +41,30 @@ function StatCard({
   );
 }
 
+function timeAgo(iso: string): string {
+  const seconds = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 1000));
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.floor(hours / 24)}d ago`;
+}
+
+const DECISION_LABEL: Record<string, string> = {
+  CallAllowed: "ALLOWED",
+  CallBlocked: "BLOCKED",
+  CallPendingApproval: "APPROVAL",
+};
+
+// U16 (v2 upgrade), FRONTEND_V2.md's Command Center: "Live, not
+// refresh-based". No new WS channel exists for this org-wide snapshot (the
+// existing fan-out is per-agent, `docs/adr/ADR-021`) -- polled every 5s
+// instead, which is the honest scoping call made there.
 export function OverviewPage() {
   const role = useAuthStore((s) => s.role);
   const [stats, setStats] = useState<Stats | null>(null);
+  const [snapshot, setSnapshot] = useState<CommandCenterSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -58,6 +79,26 @@ export function OverviewPage() {
       });
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+    function poll() {
+      api
+        .getCommandCenterSnapshot()
+        .then((s) => {
+          if (!cancelled) setSnapshot(s);
+        })
+        .catch(() => {
+          // Best-effort — the rest of the page still works from stats above.
+        });
+    }
+    poll();
+    const interval = setInterval(poll, 5000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, []);
+
   const totalCalls = stats?.traces.reduce((sum, t) => sum + t.total_calls, 0) ?? 0;
   const blockedCalls = stats?.traces.reduce((sum, t) => sum + t.blocked_calls, 0) ?? 0;
   const totalCost = stats?.traces.reduce((sum, t) => sum + t.total_cost, 0) ?? 0;
@@ -67,11 +108,28 @@ export function OverviewPage() {
       <TopBar liveStatus={null} />
       <div className="page page--wide">
         <div className="page__header">
-          <h1>Overview</h1>
+          <h1>Command Center</h1>
           <p className="page__subtitle">Everything BASTION has seen across your organization.</p>
         </div>
 
         {error && <p className="page__error">{error}</p>}
+
+        {snapshot && (
+          <div className="command-strip">
+            <span className={`command-strip__item${snapshot.agents_healthy < snapshot.agents_total ? " command-strip__item--warning" : ""}`}>
+              <span className="command-strip__dot" /> {snapshot.agents_healthy}/{snapshot.agents_total}{" "}
+              agents healthy
+            </span>
+            <span className="command-strip__item">
+              <span className="command-strip__dot" /> {snapshot.availability_pct.toFixed(2)}% call
+              success rate
+            </span>
+            <span className="command-strip__item">
+              Last incident{" "}
+              {snapshot.last_incident_at ? timeAgo(snapshot.last_incident_at) : "— none recorded"}
+            </span>
+          </div>
+        )}
 
         {stats && stats.agents.length === 0 ? (
           <div className="onboarding">
@@ -124,6 +182,29 @@ export function OverviewPage() {
               />
             </div>
 
+            {snapshot && snapshot.recent_activity.length > 0 && (
+              <section className="overview-recent">
+                <h2>Live agent activity</h2>
+                <ul className="trace-list">
+                  {snapshot.recent_activity.map((entry, i) => (
+                    <li key={`${entry.agent_id}-${entry.at}-${i}`}>
+                      <div
+                        className={`trace-list__item trace-list__item--${
+                          entry.decision === "CallBlocked" ? "had_blocks" : "completed"
+                        }`}
+                      >
+                        <span className="trace-list__status">
+                          {entry.agent_name} — {entry.tool_name} —{" "}
+                          {DECISION_LABEL[entry.decision] ?? entry.decision}
+                        </span>
+                        <span className="trace-list__meta">{timeAgo(entry.at)}</span>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            )}
+
             <section className="overview-recent">
               <h2>Recent traces</h2>
               {stats && stats.traces.length === 0 ? (
@@ -133,7 +214,7 @@ export function OverviewPage() {
                   {stats?.traces.slice(0, 6).map((t) => (
                     <li key={t.trace_id}>
                       <Link
-                        to={`/graph?trace=${t.trace_id}`}
+                        to={`/replay/${t.trace_id}`}
                         className={`trace-list__item trace-list__item--${t.status}`}
                       >
                         <span className="trace-list__status">{TRACE_STATUS_LABEL[t.status]}</span>

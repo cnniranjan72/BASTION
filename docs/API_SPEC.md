@@ -255,12 +255,16 @@ pasted access token, no login form (that's Phase 7's job).
 ### Traces
 **Served by the aggregator, not the interceptor** (`aggregator/src/bastion_aggregator/main.py`)
 — it owns the read-model these come from, and independently verifies the same JWTs (public
-key only, AUTH.md's "without calling the auth service"). `agent_id`/`status`/`from`/`to`
-filters aren't implemented yet.
+key only, AUTH.md's "without calling the auth service").
 
 - `GET /traces` (any role) — persisted (terminal-state) traces for the caller's org, newest
   first. An in-progress trace has no `trace_summaries` row by design (see `GET /traces/{id}`
-  below) — it won't appear here until it finishes.
+  below) — it won't appear here until it finishes. U16 (v2 upgrade), Trace Explorer: optional
+  query filters, all combinable — `agent_id` (uuid), `status` (`completed`|`failed`|
+  `had_blocks`), `tool` (matches any node's `tool_name` in the trace's folded graph), `policy`
+  (matches a policy *name* — resolved via `events.payload->>'policy_id'`, since neither
+  `trace_summaries` nor its `graph_snapshot` denormalizes a policy reference onto a node),
+  `started_after`/`started_before` (ISO 8601 timestamps).
 - `GET /traces/{trace_id}` — full replay: `trace_summaries.graph_snapshot` if a persisted
   projection exists (fast path), else folds `events` fresh — this is what makes an
   **in-progress** trace replayable too, not just completed ones (event-sourcing discipline:
@@ -280,6 +284,34 @@ filters aren't implemented yet.
   ```
 - `GET /traces/{trace_id}/events` — raw event list, ordered by `sequence_number` (for the
   2D inspector panel, ARCHITECTURE.md §2.6).
+
+### Analytics (U16, v2 upgrade — FRONTEND_V2.md's supporting surfaces)
+Also served by the aggregator. Every field traces back to a real aggregate over `events`/
+`trace_summaries`/`policies`/`agents`/Redis circuit-breaker state — see `docs/adr/ADR-021` for
+the exact definition (and why) of every place the spec's own illustrative text ("99.97%
+availability") isn't literally something this system tracks.
+
+- `GET /threats?window_days=30` (any role) — Threat Center. "Threats" means blocked calls (no
+  prompt-injection-specific detector exists). Returns `blocked_calls_total`,
+  `top_violated_policies` (`[{policy_id, policy_name, block_count}]`, top 10), and a daily
+  `timeline` (`[{day, blocked_count}]`).
+- `GET /agents/{agent_id}/health?window_days=30` (any role) — Agent Health. Real call-count
+  breakdown (`calls_total`/`blocked_total`/`failed_total`/`pending_approval_total`), real
+  `avg_latency_ms`/`estimated_cost_total`, `top_tools`, plus a composite `health_score` (0-100)
+  and its four real inputs (`reliability`, `policy_compliance`, `tool_error_rate`,
+  `approval_rate`) and any real anomaly `anomalies` (baseline-comparison call-rate spikes). 404
+  `AGENT_NOT_FOUND` for a missing/cross-org agent.
+- `GET /costs?window_days=30` (any role) — Cost Center. `total_cost`, `by_agent`, `by_tool` (all
+  real, from `events.payload->>'cost'`), and `estimated_savings_from_policy_enforcement` — an
+  estimate (a blocked call never runs, so never has a real cost) built from this org's own real
+  average cost per `(agent, tool)` pair, not a guessed number.
+- `GET /command-center?window_days=1` (any role) — Command Center. `agents_total`/
+  `agents_healthy` (an agent counts as unhealthy if it currently has an `OPEN` circuit breaker,
+  read live from Redis), `availability_pct` (real `CallCompleted / (CallCompleted + CallFailed)`
+  ratio — a reliability signal, not literal infra uptime), `last_incident_at` (most recent
+  `CallBlocked`), and `recent_activity` (last 15 allow/block/pending-approval decisions). Polled
+  by the frontend, not WS-pushed — a new org-wide broadcast channel is out of scope for this
+  endpoint (the existing WS fan-out is per-agent).
 
 ## Realtime API
 

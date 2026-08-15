@@ -1391,7 +1391,99 @@ confirmed still on Postgres LISTEN/NOTIFY per v1 design) — no mismatch found.
   has no `test` script) — verification for both v1 and this phase's
   additions is typecheck + lint + real in-browser exercise, consistent
   with how v1 was originally verified.
-- U16: not started.
+- **U16 — the 7 supporting surfaces deferred from U15, plus the command
+  palette upgrade and nav restructure. Done, backend-verified, and
+  browser-verified end to end.** FRONTEND_V2.md's full nav structure
+  (Overview / Operate / Control / Security / Analyze / Admin) is now real;
+  every number on every new screen traces back to a real query, never a
+  hardcoded or randomly generated figure.
+
+  **Backend built first, per the phase's own non-negotiable rule** — 5 new
+  endpoints, all served by the aggregator (it already owns the read-model,
+  `docs/API_SPEC.md`'s new Analytics section has full detail):
+  `GET /threats`, `GET /agents/{id}/health`, `GET /costs`,
+  `GET /command-center`, and `GET /traces`'s agent_id/status/tool/policy/
+  time-range filters (previously flagged "not implemented yet"). New
+  `shared/src/bastion_shared/analytics_api.py` response models.
+
+  **Several of FRONTEND_V2.md's own illustrative numbers ("99.97%
+  availability", "4.7× over baseline") aren't literally anything this
+  system tracks** — each got a real, explicitly decided substitute
+  instead of a silent guess, all recorded in `docs/adr/ADR-021`:
+  "threats" = blocked calls (no prompt-injection detector exists);
+  "availability" = real call-success rate, not infra uptime (no
+  uptime-history mechanism exists anywhere); "agents healthy" = no
+  currently-`OPEN` circuit breaker, read live from interceptor's own
+  Redis state; the agent health score's exact 4-input formula and weights;
+  the call-rate-anomaly baseline (this agent's own trailing 7-day daily
+  average, today excluded); and Cost Center's "estimated savings" (this
+  org's own real avg cost per agent+tool × that pair's blocked-call
+  count — an estimate by construction, since a blocked call never runs
+  and so never has a real recorded cost).
+
+  **Command Center** (`OverviewPage.tsx`, upgraded): the live snapshot
+  strip (agents healthy, call-success rate, last incident) polls
+  `GET /command-center` every 5s — no new WS channel built for this one
+  org-wide snapshot (the existing fan-out is per-agent), a scoping call
+  recorded in ADR-021, not silently shipped as "live" when it isn't.
+
+  **Trace Explorer** (`TracesPage.tsx`, upgraded): filters moved from
+  client-side re-filtering of an already-fetched list to real server-side
+  `GET /traces` query params. The tool filter started as a `<select>`
+  restricted to policy-rule-named tools and was caught wrong during
+  browser verification — most of a policy's tools are only ever reached
+  through a wildcard `*` rule, never named explicitly, so the dropdown
+  silently couldn't find real, already-observed tools. Fixed to a
+  free-text input with autocomplete suggestions, verified against a
+  tool name that matched 0 results and one that matched real ones.
+
+  **Approval Center** (`ApprovalsPage.tsx`, upgraded): each pending
+  approval now fetches its real trace graph and shows the pending span's
+  actual `tool_name`/`args`/`reason` plus the real prior calls in the same
+  trace — "the causal trace leading up to it," not just `trace_id`/
+  `span_id` as raw text. Verified against a real `require_approval` policy
+  created through the live API for this check: the card rendered the real
+  tool (`admin.delete_account`), real args, and Approve correctly resolved
+  it and refreshed the list.
+
+  **Threat Center, Cost Center, Agent Health** (new pages): all verified
+  in-browser against real accumulated local data — 953 blocked calls
+  across 1 violated policy with a real daily bar chart; an honest empty
+  state on Cost Center (this session's demo agent never opts into
+  reporting `cost`, so there's genuinely nothing to show, not a bug); a
+  99/100 health score with real component breakdown and top-tools table.
+
+  **Command palette**: added the four real actions FRONTEND_V2.md asks
+  for — show blocked calls, show pending approvals, create a policy,
+  replay last incident (a real computation over already-fetched traces,
+  not a hardcoded link) — verified each one actually navigates correctly,
+  including a genuine round-trip through "Replay last incident" landing on
+  the correct trace's real timeline.
+
+  **Real, pre-existing bug found and fixed along the way, unrelated to
+  U16's own scope**: every `/graph?trace={id}` link across Overview,
+  Traces, Approvals, and the command palette was dead — `Dashboard.tsx`
+  never read that query param at all (confirmed by grepping the whole
+  frontend for `searchParams`/`location.search`: nothing outside this
+  session's own new code reads either). The actually-implemented deep
+  link, already used correctly by `Dashboard.tsx`'s own sidebar, is
+  `/replay/{traceId}` — every one of those links now points there instead.
+
+  Verified in-browser (not just typechecked) against a real running
+  interceptor/aggregator: logged in as the seeded demo user, exercised
+  every new/upgraded page, generated a real pending approval through the
+  live API mid-session specifically to verify the causal-trace card
+  couldn't otherwise be checked from existing seed data, and confirmed
+  zero console errors throughout. 219/219 backend tests pass
+  (213 prior + 6 new `aggregator/tests/test_analytics.py` cases covering
+  all 5 new/changed endpoints plus a cross-org 404 check).
+
+  **Deliberately not built, stated explicitly**: a distinct "Incidents"
+  index page and a separate "Audit Log" screen (both named in
+  FRONTEND_V2.md's nav sketch) — Incident Replay is reached via Traces →
+  a specific trace, and the real audit trail is the event log, already
+  reachable per-trace; a standalone index/log screen for either is real,
+  separate scope, not silently faked as a working nav link.
 
 ### ADR checklist (mirrors `ADR_INDEX.md`)
 - [x] ADR-001: PostgreSQL as source of truth — `docs/adr/ADR-001-...md`.
@@ -1412,6 +1504,8 @@ confirmed still on Postgres LISTEN/NOTIFY per v1 design) — no mismatch found.
   `docs/adr/ADR-019-otel-trace-naming-and-kafka-propagation.md`.
 - [x] ADR-020 (unlisted, added U15): policy simulator and propagation-status endpoint scope — see
   `docs/adr/ADR-020-policy-simulator-and-propagation-status-scope.md`.
+- [x] ADR-021 (unlisted, added U16): real metric definitions for the 7 supporting surfaces — see
+  `docs/adr/ADR-021-supporting-surfaces-metric-definitions.md`.
 
 ### Chaos / load test status
 **Load testing (U13): done — see the U13 entry above and `README.md`'s "v2 load test" section for the

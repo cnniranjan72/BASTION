@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
+import { Link } from "react-router-dom";
 import { api, ApiError } from "../api/client";
 import { useAuthStore } from "../store/auth";
 import { toast } from "../store/toast";
@@ -165,6 +166,7 @@ export function AgentsPage() {
                   <th>Policy</th>
                   <th>Agent ID</th>
                   <th>Created</th>
+                  <th>Health</th>
                   {canManage(role) && <th>Reassign policy</th>}
                 </tr>
               </thead>
@@ -175,6 +177,9 @@ export function AgentsPage() {
                     <td>{policyName(agent.policy_set_id)}</td>
                     <td className="data-table__mono">{agent.id}</td>
                     <td>{new Date(agent.created_at).toLocaleString()}</td>
+                    <td>
+                      <Link to={`/agents/${agent.id}/health`}>View →</Link>
+                    </td>
                     {canManage(role) && (
                       <td>
                         <select
