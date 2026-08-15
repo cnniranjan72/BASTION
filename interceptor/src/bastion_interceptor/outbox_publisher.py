@@ -27,7 +27,7 @@ from typing import Any
 import asyncpg
 import structlog
 from aiokafka import AIOKafkaProducer
-from bastion_shared import TOOL_EVENTS_TOPIC
+from bastion_shared import TOOL_EVENTS_TOPIC, kafka_client_kwargs
 
 from . import tracing
 from .config import config
@@ -46,6 +46,12 @@ class OutboxPublisher:
             bootstrap_servers=config.kafka_bootstrap_servers,
             key_serializer=lambda k: k.encode("utf-8") if k is not None else None,
             value_serializer=lambda v: json.dumps(v).encode("utf-8"),
+            **kafka_client_kwargs(
+                security_protocol=config.kafka_security_protocol,
+                sasl_mechanism=config.kafka_sasl_mechanism,
+                sasl_username=config.kafka_sasl_username,
+                sasl_password=config.kafka_sasl_password,
+            ),
         )
         await self._producer.start()
 

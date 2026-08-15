@@ -21,7 +21,7 @@ from typing import Any
 
 import structlog
 from aiokafka import AIOKafkaConsumer
-from bastion_shared import TOOL_EVENTS_TOPIC
+from bastion_shared import TOOL_EVENTS_TOPIC, kafka_client_kwargs
 from opentelemetry import trace as otel_trace
 
 from . import tracing
@@ -47,6 +47,12 @@ class KafkaEventConsumer:
             auto_offset_reset=self._auto_offset_reset,
             enable_auto_commit=False,
             value_deserializer=lambda v: json.loads(v.decode("utf-8")),
+            **kafka_client_kwargs(
+                security_protocol=config.kafka_security_protocol,
+                sasl_mechanism=config.kafka_sasl_mechanism,
+                sasl_username=config.kafka_sasl_username,
+                sasl_password=config.kafka_sasl_password,
+            ),
         )
         await self._consumer.start()
         self._task = asyncio.create_task(self._consume(on_notification))

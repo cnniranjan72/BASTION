@@ -52,6 +52,7 @@ from .jwt_auth import (
     encode_access_token,
     load_key_file,
 )
+from .kafka_auth import kafka_client_kwargs
 from .kafka_topics import TOOL_EVENTS_TOPIC
 from .policy import Policy, PolicyDefinition, PolicyLimits, PolicyMatch, PolicyRule
 from .policy_api import (
@@ -74,6 +75,7 @@ from .users_api import CreateUserRequest, CreateUserResponse, UpdateUserRoleRequ
 __all__ = [
     "AgentResponse",
     "TOOL_EVENTS_TOPIC",
+    "kafka_client_kwargs",
     "TERMINAL_STATES",
     "CallState",
     "IllegalStateTransition",

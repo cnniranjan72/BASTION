@@ -39,6 +39,14 @@ class Config:
     # to this — the interceptor's own hot path never touches Kafka
     # directly (§4.2: Kafka is distribution, not on the critical write path).
     kafka_bootstrap_servers: str
+    # U15 CI-fix follow-up: a managed Kafka reachable over the public
+    # internet (unlike local dev/CI's plaintext single-node broker) needs
+    # SASL_SSL auth. Defaults keep local/CI on plaintext unchanged — only
+    # set when KAFKA_SECURITY_PROTOCOL is explicitly overridden.
+    kafka_security_protocol: str
+    kafka_sasl_mechanism: str
+    kafka_sasl_username: str
+    kafka_sasl_password: str
     # U5 (v2 upgrade), UPGRADE_ARCHITECTURE.md §6's reconciliation loop: how
     # often this instance re-checks its cached policy versions against
     # Postgres, self-healing any drift from a missed Redis pub/sub message.
@@ -82,6 +90,10 @@ def load_config() -> Config:
         ),
         refresh_token_ttl_days=int(os.environ.get("REFRESH_TOKEN_TTL_DAYS", "30")),
         kafka_bootstrap_servers=os.environ.get("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092"),
+        kafka_security_protocol=os.environ.get("KAFKA_SECURITY_PROTOCOL", "PLAINTEXT"),
+        kafka_sasl_mechanism=os.environ.get("KAFKA_SASL_MECHANISM", ""),
+        kafka_sasl_username=os.environ.get("KAFKA_SASL_USERNAME", ""),
+        kafka_sasl_password=os.environ.get("KAFKA_SASL_PASSWORD", ""),
         policy_reconciliation_interval_seconds=float(
             os.environ.get("POLICY_RECONCILIATION_INTERVAL_SECONDS", "30")
         ),

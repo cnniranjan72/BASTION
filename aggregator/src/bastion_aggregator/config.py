@@ -19,6 +19,13 @@ class Config:
     # dev/CI.
     jwt_public_key_path: str
     kafka_bootstrap_servers: str
+    # U15 CI-fix follow-up: same reasoning as interceptor/config.py's fields
+    # of the same name — a managed Kafka reachable over the public internet
+    # needs SASL_SSL auth; local dev/CI's plaintext broker is unaffected.
+    kafka_security_protocol: str
+    kafka_sasl_mechanism: str
+    kafka_sasl_username: str
+    kafka_sasl_password: str
     # U9 (v2 upgrade), UPGRADE_ARCHITECTURE.md §11 — same reasoning as
     # interceptor/config.py's field of the same name.
     db_query_timeout_seconds: float
@@ -46,6 +53,10 @@ def load_config() -> Config:
             "JWT_PUBLIC_KEY_PATH", str(_REPO_ROOT / "infra" / "keys" / "jwt_public.pem")
         ),
         kafka_bootstrap_servers=os.environ.get("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092"),
+        kafka_security_protocol=os.environ.get("KAFKA_SECURITY_PROTOCOL", "PLAINTEXT"),
+        kafka_sasl_mechanism=os.environ.get("KAFKA_SASL_MECHANISM", ""),
+        kafka_sasl_username=os.environ.get("KAFKA_SASL_USERNAME", ""),
+        kafka_sasl_password=os.environ.get("KAFKA_SASL_PASSWORD", ""),
         db_query_timeout_seconds=float(os.environ.get("DB_QUERY_TIMEOUT_SECONDS", "30")),
         ws_batch_window_seconds=float(os.environ.get("WS_BATCH_WINDOW_SECONDS", "0.1")),
         otel_exporter_otlp_endpoint=os.environ.get(
