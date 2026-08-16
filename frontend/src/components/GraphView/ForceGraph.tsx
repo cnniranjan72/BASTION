@@ -117,20 +117,24 @@ export function ForceGraph() {
     // catch it; the physics itself needs a hard bound, not just the
     // render path. Clamping (and zeroing residual velocity so a clamped
     // node doesn't immediately re-launch next tick) is a robust backstop
-    // regardless of how well the force constants above are ever tuned —
-    // OrbitControls' own maxDistance is 30, so nothing here needs to be
-    // further out than that to stay visible.
-    // Bound is sized against the CAMERA's actual position (GraphCanvas.tsx:
-    // [0, 0, 8]), not OrbitControls' maxDistance=30 -- maxDistance only
-    // limits how far the *user* can zoom out, it says nothing about where
-    // the camera sits by default. The prior bound of 15 let z exceed 8,
-    // i.e. let nodes end up level with or behind the camera at the
-    // default, unzoomed view: confirmed in production as node labels
-    // projecting to wildly wrong screen coordinates (e.g. y=1020 in a
-    // ~530px-tall canvas) despite the underlying x/y/z all being finite
-    // and within +-15. Keeping the bound comfortably inside the default
-    // camera distance keeps every node in front of the camera by default.
-    const MAX_POSITION = 6;
+    // regardless of how well the force constants above are ever tuned.
+    // An axis-aligned cube clamp (the first attempt at this bound, kept
+    // only in git history now) turned out to be insufficient on its own:
+    // it stops any single axis from exploding, but doesn't stop a node
+    // landing close to the camera on one axis (GraphCanvas.tsx: camera
+    // sits at [0, 0, 8]) while simultaneously far off-axis on another --
+    // that combination is a real perspective-projection blowup (near
+    // camera + large lateral offset = a label projected wildly off
+    // whatever the canvas's actual pixel bounds are), confirmed in
+    // production after the cube-clamp fix shipped: label rects at
+    // y=-182 and y=1020 against a canvas only ~530px tall. A *radial*
+    // clamp on the position vector's magnitude avoids this: pushing a
+    // node's lateral offset up necessarily pulls its z back down (both
+    // are bounded by the same sum-of-squares), so it can never be both
+    // close to the camera and far off-axis at once. MAX_RADIUS=4 keeps
+    // the closest possible camera-to-node distance at 8-4=4, comfortably
+    // outside the near-clipping distortion zone for this camera/fov.
+    const MAX_RADIUS = 4;
     for (const node of simNodesRef.current.values()) {
       const rawX = node.x ?? 0;
       const rawY = node.y ?? 0;
@@ -138,9 +142,11 @@ export function ForceGraph() {
       const x = Number.isFinite(rawX) ? rawX : 0;
       const y = Number.isFinite(rawY) ? rawY : 0;
       const z = Number.isFinite(rawZ) ? rawZ : 0;
-      const clampedX = Math.min(MAX_POSITION, Math.max(-MAX_POSITION, x));
-      const clampedY = Math.min(MAX_POSITION, Math.max(-MAX_POSITION, y));
-      const clampedZ = Math.min(MAX_POSITION, Math.max(-MAX_POSITION, z));
+      const magnitude = Math.sqrt(x * x + y * y + z * z);
+      const scale = magnitude > MAX_RADIUS ? MAX_RADIUS / magnitude : 1;
+      const clampedX = x * scale;
+      const clampedY = y * scale;
+      const clampedZ = z * scale;
       if (clampedX !== node.x || clampedY !== node.y || clampedZ !== node.z) {
         node.x = clampedX;
         node.y = clampedY;
