@@ -120,7 +120,17 @@ export function ForceGraph() {
     // regardless of how well the force constants above are ever tuned —
     // OrbitControls' own maxDistance is 30, so nothing here needs to be
     // further out than that to stay visible.
-    const MAX_POSITION = 15;
+    // Bound is sized against the CAMERA's actual position (GraphCanvas.tsx:
+    // [0, 0, 8]), not OrbitControls' maxDistance=30 -- maxDistance only
+    // limits how far the *user* can zoom out, it says nothing about where
+    // the camera sits by default. The prior bound of 15 let z exceed 8,
+    // i.e. let nodes end up level with or behind the camera at the
+    // default, unzoomed view: confirmed in production as node labels
+    // projecting to wildly wrong screen coordinates (e.g. y=1020 in a
+    // ~530px-tall canvas) despite the underlying x/y/z all being finite
+    // and within +-15. Keeping the bound comfortably inside the default
+    // camera distance keeps every node in front of the camera by default.
+    const MAX_POSITION = 6;
     for (const node of simNodesRef.current.values()) {
       const rawX = node.x ?? 0;
       const rawY = node.y ?? 0;
