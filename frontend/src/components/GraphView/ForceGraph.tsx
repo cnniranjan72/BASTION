@@ -70,12 +70,23 @@ export function ForceGraph() {
     const simNodes = simNodesRef.current;
     for (const id of nodeIds) {
       if (!simNodes.has(id)) {
-        // Spawn new nodes near the origin in a random shell so the
-        // simulation has somewhere non-degenerate to push them out from,
-        // rather than everything stacking at (0,0,0).
+        // Spawn new nodes in a random shell, radius growing with spawn
+        // order (d3-force's own initializeNodes fallback uses this exact
+        // Math.cbrt(0.5 + i) scaling for 3D, for the same reason) rather
+        // than one fixed small radius for every node. A fixed r=0.5 shell
+        // put several nodes from the same resync/live burst within
+        // forceManyBody's distanceMin of each other — confirmed in
+        // production, not theoretical: one such burst put a node at
+        // (x=-7133, y=15584) before the position clamp below existed, and
+        // even after clamping, several nodes converged into one
+        // indistinguishable overlapping cluster instead of a legible
+        // graph. Spacing the spawn points out is the actual fix for
+        // *that* (the clamp only guarantees they stay on-screen, not that
+        // they're visually distinguishable).
+        const spawnIndex = simNodes.size;
         const theta = Math.random() * Math.PI * 2;
         const phi = Math.acos(2 * Math.random() - 1);
-        const r = 0.5;
+        const r = 1.5 * Math.cbrt(0.5 + spawnIndex);
         simNodes.set(id, {
           id,
           x: r * Math.sin(phi) * Math.cos(theta),
