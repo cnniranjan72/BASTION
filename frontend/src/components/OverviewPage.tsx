@@ -73,6 +73,7 @@ const DECISION_LABEL: Record<string, string> = {
 export function OverviewPage() {
   const role = useAuthStore((s) => s.role);
   const [stats, setStats] = useState<Stats | null>(null);
+  const [statsLoaded, setStatsLoaded] = useState(false);
   const [snapshot, setSnapshot] = useState<CommandCenterSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -96,7 +97,16 @@ export function OverviewPage() {
       })
       .catch((err: unknown) => {
         setError(err instanceof ApiError ? err.message : "Failed to load overview");
-      });
+      })
+      // Distinct from `stats` itself being null-because-not-fetched-yet vs
+      // null-because-the-fetch-failed -- without this, a transient failure
+      // (one flaky request in the Promise.all, a momentary rate limit) fell
+      // through to the "populated" branch below with every stat defaulting
+      // to 0/"—", which reads as "this org has no data" instead of "this
+      // failed to load" -- on the very first page a brand-new signup lands
+      // on. Dashboard.tsx's sidebar already gets this right via its own
+      // `agentsLoaded` flag; this just matches that established pattern.
+      .finally(() => setStatsLoaded(true));
   }, []);
 
   useEffect(() => {
@@ -156,7 +166,9 @@ export function OverviewPage() {
           </div>
         )}
 
-        {stats && stats.agents.length === 0 ? (
+        {!statsLoaded ? (
+          <p className="page__empty">Loading your organization…</p>
+        ) : stats && stats.agents.length === 0 ? (
           <div className="onboarding">
             <h2>Get started</h2>
             <ol className="onboarding__steps">
@@ -174,7 +186,7 @@ export function OverviewPage() {
               </li>
             </ol>
           </div>
-        ) : (
+        ) : stats ? (
           <>
             <div className="stat-grid">
               <StatCard to="/agents" label="Agents" value={stats?.agents.length ?? "—"} icon={AgentsIcon} />
@@ -267,7 +279,7 @@ export function OverviewPage() {
               )}
             </section>
           </>
-        )}
+        ) : null}
 
         {role && (
           <p className="page__subtitle" style={{ marginTop: "2rem" }}>
