@@ -427,8 +427,8 @@ a {
 }
 .topbar__nav {
   display: flex;
-  gap: 0.2rem;
-  margin-left: 1.5rem;
+  gap: 0.15rem;
+  margin-left: 0.9rem;
   /* U16 grew this to 6 groups/12+ links, and flex items default to
      min-width: auto -- meaning a flex child normally refuses to shrink
      below its own content's intrinsic width even when flex-shrink allows
@@ -446,10 +446,10 @@ a {
   position: relative;
   display: flex;
   align-items: center;
-  gap: 0.4rem;
-  padding: 0.4rem 0.7rem;
+  gap: 0.35rem;
+  padding: 0.4rem 0.55rem;
   border-radius: var(--radius-sm);
-  font-size: 0.8rem;
+  font-size: 0.78rem;
   color: var(--text-dim);
   text-decoration: none;
   transition:
@@ -495,8 +495,8 @@ a {
   gap: 0.2rem;
 }
 .topbar__nav-group:not(:first-child) {
-  padding-left: 0.5rem;
-  margin-left: 0.3rem;
+  padding-left: 0.35rem;
+  margin-left: 0.2rem;
   border-left: 1px solid var(--border);
 }
 .topbar__nav-group-label {
@@ -593,6 +593,32 @@ a {
   border-radius: 4px;
   padding: 0.05rem 0.35rem;
   color: var(--text-faint);
+}
+
+/* U16 grew the nav past what fits at any real laptop width even after
+   trimming padding/icon size everywhere else -- confirmed by measuring
+   .topbar__nav's actual scrollWidth vs clientWidth, not guessed: it was
+   still overflowing by ~85px at 1536px wide after those other trims. The
+   search trigger's "Jump to…" text is the last easy win before nav items
+   themselves would need to be cut or wrapped -- icon + ⌘K alone is a
+   standard, self-explanatory pattern (Linear, Vercel, Stripe all do
+   this), not a discoverability loss worth the tradeoff of a scrollable
+   primary nav bar. Above 1780px there's room for the full label, so it
+   stays there. */
+@media (max-width: 1780px) {
+  .topbar__search span {
+    display: none;
+  }
+  .topbar__search {
+    padding: 0.4rem 0.5rem;
+  }
+  /* The org id badge is a debugging convenience, not primary navigation
+     -- the role badge next to it already answers "who am I" at a glance,
+     so this is the next cheapest thing to drop before nav items
+     themselves would have to be cut. */
+  .topbar__org {
+    display: none;
+  }
 }
 
 .sidebar {

@@ -12,7 +12,6 @@ import {
   CostIcon,
   DocsIcon,
   GraphIcon,
-  HealthIcon,
   OverviewIcon,
   PoliciesIcon,
   SearchIcon,
@@ -48,7 +47,7 @@ const NAV_GROUPS: Array<{
     links: [
       { to: "/agents", label: "Agents", icon: AgentsIcon },
       { to: "/policies", label: "Policies", icon: PoliciesIcon },
-      { to: "/policy-studio", label: "Policy Simulator", icon: PoliciesIcon },
+      { to: "/policy-studio", label: "Simulator", icon: PoliciesIcon },
     ],
   },
   {
@@ -60,7 +59,6 @@ const NAV_GROUPS: Array<{
     links: [
       { to: "/analytics", label: "Analytics", icon: AnalyticsIcon },
       { to: "/costs", label: "Costs", icon: CostIcon },
-      { to: "/agents", label: "Agent Health", icon: HealthIcon },
     ],
   },
   {
@@ -139,7 +137,7 @@ export function TopBar({ liveStatus }: TopBarProps) {
                 onClick={() => setMenuOpen(false)}
                 className={({ isActive }) => `topbar__nav-link${isActive ? " is-active" : ""}`}
               >
-                <link.icon width={16} height={16} />
+                <link.icon width={14} height={14} />
                 {link.label}
               </NavLink>
             ))}
