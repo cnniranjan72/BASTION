@@ -150,6 +150,15 @@ jobs:
       # anyway) — this suite is real-infra-chaos-local-only by design, run via
       # `uv run pytest aggregator/tests/chaos` against docker-compose, not in CI.
       - run: uv run pytest shared/tests interceptor/tests aggregator/tests sdk-python/tests demo-agent/tests catalog/tests --ignore=aggregator/tests/chaos
+      # Confirmed the hard way: leaving the catalog service (a `uv run`
+      # process, not an isolated container like MinIO/Kafka/Postgres/Redis
+      # above) running past this point makes setup-uv's own post-job cache
+      # prune hang for ~5 minutes against a live file handle into the same
+      # venv, then fail the whole job with exit code 2 -- passing tests and
+      # all. Stop it explicitly, in-job, before any post-action runs.
+      - name: Stop catalog service
+        if: always()
+        run: pkill -f 'bastion_catalog.main:app' || true
 
   frontend:
     name: Frontend (typecheck, lint, test)
