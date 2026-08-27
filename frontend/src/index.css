@@ -2462,6 +2462,24 @@ a {
     var(--bg);
   color: var(--text);
 }
+.public-demo__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.6rem 1rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-panel);
+}
+.public-demo__caption {
+  padding: 0.7rem 1rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-panel);
+  color: var(--text-dim);
+  font-size: 0.85rem;
+  max-width: 760px;
+}
+
 .landing__nav {
   display: flex;
   align-items: center;
@@ -2519,6 +2537,15 @@ a {
   display: flex;
   flex-direction: column;
   align-items: center;
+}
+.landing__plain-statement {
+  font-family: var(--font-sans);
+  font-size: 1.3rem;
+  font-weight: 600;
+  line-height: 1.45;
+  color: var(--text);
+  max-width: 600px;
+  margin: 0 0 1.6rem;
 }
 .landing__eyebrow {
   font-family: var(--font-mono);

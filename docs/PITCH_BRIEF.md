@@ -9,7 +9,8 @@ The track's own framing: *"NPCI's UAP and the global protocol race (ACP, AP2, x4
 agent-to-agent commerce the open problem of the year."* Four different, competing proposals for how
 an agent should pay — none of them answer who's watching what the agent is about to do, or whether
 anything can stop it before the money moves. That's the trust gap this project targets: not another
-payment rail, the missing control plane in front of whichever one wins.
+payment rail, the missing control plane — the layer that actually watches and can stop a call — in
+front of whichever one wins.
 
 ## What this is
 

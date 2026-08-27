@@ -2,6 +2,7 @@ import { Navigate, Route, BrowserRouter, Routes } from "react-router-dom";
 import { LandingPage } from "./components/LandingPage";
 import { LoginPage } from "./components/LoginPage";
 import { SignupPage } from "./components/SignupPage";
+import { PublicDemoPage } from "./components/PublicDemoPage";
 import { OverviewPage } from "./components/OverviewPage";
 import { Dashboard } from "./components/Dashboard";
 import { AgentsPage } from "./components/AgentsPage";
@@ -45,6 +46,7 @@ export function App() {
       <Routes>
         <Route path="/login" element={<LoginPage />} />
         <Route path="/signup" element={<SignupPage />} />
+        <Route path="/demo" element={<PublicDemoPage />} />
         <Route path="/" element={<HomeRoute />} />
         <Route
           path="/graph"

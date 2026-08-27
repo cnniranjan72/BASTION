@@ -24,7 +24,7 @@ const HOW_IT_WORKS = [
   {
     icon: GraphIcon,
     title: "Every call, intercepted",
-    body: "An agent routes a tool call through the BASTION SDK. It's checked against policy before it runs — not logged after the fact.",
+    body: "An agent routes a tool call through the BASTION SDK — the connector code it calls instead of reaching the outside world directly. It's checked against policy before it runs — not logged after the fact.",
   },
   {
     icon: PoliciesIcon,
@@ -34,7 +34,7 @@ const HOW_IT_WORKS = [
   {
     icon: ApprovalsIcon,
     title: "Explainable, always",
-    body: "Every decision is a real, append-only event: the exact args, the policy that fired, the reason — retrievable per trace, not summarized away.",
+    body: "Every decision is a real, append-only event — a permanent record only ever added to, never edited or deleted: the exact args, the policy that fired, the reason — retrievable per trace, not summarized away.",
   },
 ];
 
@@ -56,6 +56,10 @@ export function LandingPage() {
       </header>
 
       <section className="landing__hero">
+        <p className="landing__plain-statement">
+          This stops an AI agent from making a dangerous payment before it happens — watch it
+          block a real attack below.
+        </p>
         <span className="landing__eyebrow">AI agent control plane</span>
         <h1 className="landing__headline">
           Stop a dangerous agent call
@@ -69,7 +73,10 @@ export function LandingPage() {
           logging.
         </p>
         <div className="landing__cta-row">
-          <Link to="/signup" className="btn btn--primary btn--lg">
+          <Link to="/demo" className="btn btn--primary btn--lg">
+            See it block an attack
+          </Link>
+          <Link to="/signup" className="btn btn--ghost btn--lg">
             Create your organization
           </Link>
           <a
@@ -109,7 +116,7 @@ export function LandingPage() {
       <section className="landing__section" id="how-it-works">
         <div className="landing__section-head">
           <span className="landing__eyebrow">How it works</span>
-          <h2>The hot path, in three steps</h2>
+          <h2>The hot path — the split second a call gets decided — in three steps</h2>
         </div>
         <div className="landing__steps">
           {HOW_IT_WORKS.map((step, i) => (
@@ -180,7 +187,7 @@ export function LandingPage() {
       <section className="landing__section">
         <div className="landing__section-head">
           <span className="landing__eyebrow">The gap</span>
-          <h2>There's no IAM for agent actions — yet</h2>
+          <h2>There's no IAM (the "who's allowed to do what" rules) for agent actions — yet</h2>
           <p className="landing__section-sub">
             Today's observability tools log what an agent did after it happened. Nobody stops a
             hallucinating or prompt-injected agent from calling a dangerous tool before it
