@@ -37,7 +37,9 @@ export function TracesPage() {
     (searchParams.get("status") as TraceStatus | null) ?? "all",
   );
   const [agentId, setAgentId] = useState("all");
-  const [tool, setTool] = useState("all");
+  // Same real-deep-link reasoning as status above -- Command Center's new
+  // Track 01 purchase-stat cards link here with a tool filter pre-applied.
+  const [tool, setTool] = useState(searchParams.get("tool") ?? "all");
   const [policyName, setPolicyName] = useState("all");
   const [startedAfter, setStartedAfter] = useState("");
 

@@ -5,7 +5,15 @@ import { api, ApiError } from "../api/client";
 import { useAuthStore } from "../store/auth";
 import { useCountUp } from "../hooks/useCountUp";
 import { TRACE_STATUS_LABEL } from "../lib/labels";
-import { AgentsIcon, AlertIcon, AnalyticsIcon, ApprovalsIcon, GraphIcon, PoliciesIcon } from "./icons";
+import {
+  AgentsIcon,
+  AlertIcon,
+  AnalyticsIcon,
+  ApprovalsIcon,
+  CostIcon,
+  GraphIcon,
+  PoliciesIcon,
+} from "./icons";
 import { TopBar } from "./TopBar";
 import type { Agent, ApprovalRequest, CommandCenterSnapshot, TraceSummary } from "../api/types";
 
@@ -14,6 +22,7 @@ interface Stats {
   activePolicySets: number;
   approvals: ApprovalRequest[];
   traces: TraceSummary[];
+  purchaseTraces: TraceSummary[];
 }
 
 function StatCard({
@@ -68,11 +77,22 @@ export function OverviewPage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    Promise.all([api.listAgents(), api.listPolicies(), api.listApprovals(), api.listTraces()])
-      .then(([agents, policies, approvals, traces]) => {
+    Promise.all([
+      api.listAgents(),
+      api.listPolicies(),
+      api.listApprovals(),
+      api.listTraces(),
+      // Track 01: the commerce story belongs on the home screen, not three
+      // clicks deep — same GET /traces?tool= filter Trace Explorer already
+      // uses, no new endpoint. A tool this org has never called just comes
+      // back empty, which is the correct "no purchases yet" state, not an
+      // error.
+      api.listTraces({ tool: "razorpay.purchase" }),
+    ])
+      .then(([agents, policies, approvals, traces, purchaseTraces]) => {
         const activePolicySets = new Set(policies.filter((p) => p.active).map((p) => p.policy_set_id))
           .size;
-        setStats({ agents, activePolicySets, approvals, traces });
+        setStats({ agents, activePolicySets, approvals, traces, purchaseTraces });
       })
       .catch((err: unknown) => {
         setError(err instanceof ApiError ? err.message : "Failed to load overview");
@@ -102,6 +122,11 @@ export function OverviewPage() {
   const totalCalls = stats?.traces.reduce((sum, t) => sum + t.total_calls, 0) ?? 0;
   const blockedCalls = stats?.traces.reduce((sum, t) => sum + t.blocked_calls, 0) ?? 0;
   const totalCost = stats?.traces.reduce((sum, t) => sum + t.total_cost, 0) ?? 0;
+  // A purchase trace that "had_blocks" means the purchase itself was
+  // blocked (over-threshold or rate-limited) -- there's nothing else in
+  // this single-span trace shape that could produce a block otherwise.
+  const purchasesCompleted = stats?.purchaseTraces.filter((t) => t.status === "completed").length ?? 0;
+  const purchasesBlocked = stats?.purchaseTraces.filter((t) => t.status === "had_blocks").length ?? 0;
 
   return (
     <div className="dashboard">
@@ -144,7 +169,7 @@ export function OverviewPage() {
                 unattended, what needs a human, and what's blocked outright.
               </li>
               <li>
-                <Link to="/">Watch it live</Link> — connect the graph view to your agent and see
+                <Link to="/graph">Watch it live</Link> — connect the graph view to your agent and see
                 every call, decision, and block as it happens.
               </li>
             </ol>
@@ -179,6 +204,19 @@ export function OverviewPage() {
                 label="Total cost"
                 value={`$${totalCost.toFixed(4)}`}
                 icon={AnalyticsIcon}
+              />
+              <StatCard
+                to="/traces?tool=razorpay.purchase&status=completed"
+                label="Purchases completed"
+                value={purchasesCompleted}
+                icon={CostIcon}
+              />
+              <StatCard
+                to="/traces?tool=razorpay.purchase&status=had_blocks"
+                label="Purchases blocked"
+                value={purchasesBlocked}
+                tone={purchasesBlocked > 0 ? "warning" : undefined}
+                icon={AlertIcon}
               />
             </div>
 

@@ -1,4 +1,5 @@
 import { Navigate, Route, BrowserRouter, Routes } from "react-router-dom";
+import { LandingPage } from "./components/LandingPage";
 import { LoginPage } from "./components/LoginPage";
 import { SignupPage } from "./components/SignupPage";
 import { OverviewPage } from "./components/OverviewPage";
@@ -26,6 +27,16 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
+// "/" is the one route that means something different depending on who's
+// looking: a public pitch for a first-time visitor (no login wall between
+// a judge and "what is this"), the actual dashboard for a signed-in user.
+// Kept as a single route (not a redirect) so LoginPage's existing
+// navigate("/") on success still lands exactly where it always did.
+function HomeRoute() {
+  const accessToken = useAuthStore((s) => s.accessToken);
+  return accessToken ? <OverviewPage /> : <LandingPage />;
+}
+
 export function App() {
   return (
     <BrowserRouter>
@@ -34,14 +45,7 @@ export function App() {
       <Routes>
         <Route path="/login" element={<LoginPage />} />
         <Route path="/signup" element={<SignupPage />} />
-        <Route
-          path="/"
-          element={
-            <RequireAuth>
-              <OverviewPage />
-            </RequireAuth>
-          }
-        />
+        <Route path="/" element={<HomeRoute />} />
         <Route
           path="/graph"
           element={
