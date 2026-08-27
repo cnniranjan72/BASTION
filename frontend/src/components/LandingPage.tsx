@@ -84,6 +84,20 @@ export function LandingPage() {
             </div>
           ))}
         </div>
+
+        <figure className="landing__demo-shot">
+          <img
+            src="/live-graph-demo.gif"
+            alt="The BASTION live execution graph, showing real razorpay.purchase nodes and a real span inspector opened on a completed call"
+            width={960}
+            height={463}
+            loading="lazy"
+          />
+          <figcaption>
+            The live execution graph, mid-session — every node is a real intercepted call, not a
+            mockup.
+          </figcaption>
+        </figure>
       </section>
 
       <section className="landing__section" id="how-it-works">

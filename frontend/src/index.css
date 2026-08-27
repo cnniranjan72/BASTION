@@ -2549,6 +2549,26 @@ a {
   line-height: 1.35;
 }
 
+.landing__demo-shot {
+  margin: 3.5rem 0 0;
+  width: 100%;
+  max-width: 900px;
+}
+.landing__demo-shot img {
+  width: 100%;
+  height: auto;
+  display: block;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-bright);
+  box-shadow: var(--shadow-md);
+}
+.landing__demo-shot figcaption {
+  margin-top: 0.7rem;
+  font-size: 0.78rem;
+  color: var(--text-faint);
+  text-align: center;
+}
+
 .landing__section {
   max-width: 1080px;
   margin: 0 auto;
