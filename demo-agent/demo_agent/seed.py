@@ -1,9 +1,15 @@
-"""Idempotent seed data for the Phase 8 demo: a dedicated agent + policy
-that blocks any `payments.transfer` over $100. Direct SQL against fixed
-UUIDs, not `POST /agents`/`POST /policies` — standing in for the
-not-yet-built agent-management endpoint, same convention as
+"""Idempotent seed data for the Phase 8 demo (extended for Track 01): a
+dedicated agent + policy that blocks any `payments.transfer` over $100,
+requires approval on a `razorpay.purchase` over ₹18,000, and rate-limits
+`razorpay.purchase` to 3/minute. Direct SQL against fixed
+UUIDs, not `POST /agents`/`POST /policies` — those are real, current
+dashboard-API endpoints (see interceptor/src/bastion_interceptor/main.py),
+but neither lets a caller pin the generated id, and this script needs the
+same fixed agent id (`44444444-...`) every run so SETUP.md/README's
+documented "connect the live dashboard to agent 44444444-..." instructions
+keep working across a fresh seed. Same convention as
 `interceptor/tests/conftest.py`'s `test_agent`/`assign_policy_set_to_agent`
-fixtures (documented there, and in docs/PROGRESS.md's open questions).
+fixtures.
 
 Reuses the org created by Phase 7's manual demo setup
 (`11111111-1111-1111-1111-111111111111`, "demo-org") so this agent's traces
@@ -45,6 +51,31 @@ POLICY_NAME = "prompt-injection-demo-policy"
 
 POLICY_DEFINITION = [
     {"match": {"tool": "payments.transfer"}, "action": "block", "condition": "amount > 100"},
+    # Track 01 addition: razorpay.purchase gets its own two rules, same
+    # match/condition/limits mechanism as the rule above, no new policy
+    # engine code. Order matters (first match wins): the require_approval
+    # rule must come first so an oversized purchase is caught by its
+    # condition before the allow rule below ever sees it; an in-threshold
+    # purchase falls through this rule (condition false) to the one below.
+    # Threshold: 3x the catalog's highest single-item price (Portable SSD
+    # 1TB, catalog/src/bastion_catalog/data.py, ₹5,999), rounded to ₹18,000.
+    {
+        "match": {"tool": "razorpay.purchase"},
+        "action": "require_approval",
+        "condition": "amount_inr > 18000",
+    },
+    # calls_per_minute here scopes per-(agent, tool) (policy.py's own
+    # convention: a rule naming a specific tool, not "*", scopes the limit
+    # to that tool) — this is what catches an AI buyer agent gone wrong
+    # (bug, injection, bad logic) attempting a rapid burst of purchases,
+    # distinct from the amount-based rule above which catches one
+    # oversized purchase. Limit failures produce an immediate `blocked`
+    # decision (not require_approval), same as any other exceeded limit.
+    {
+        "match": {"tool": "razorpay.purchase"},
+        "action": "allow",
+        "limits": {"calls_per_minute": 3},
+    },
     {"match": {"tool": "*"}, "action": "allow"},
 ]
 
@@ -105,7 +136,10 @@ async def seed(database_url: str = DATABASE_URL) -> None:
     print(f"Seeded org {ORG_ID} ({ORG_NAME})")
     print(f"Seeded agent {AGENT_ID} ({AGENT_NAME})")
     print(f"Agent API key (local dev only): {AGENT_API_KEY}")
-    print(f"Active policy: {POLICY_NAME} - blocks payments.transfer where amount > 100")
+    print(f"Active policy: {POLICY_NAME}")
+    print("  - blocks payments.transfer where amount > 100")
+    print("  - razorpay.purchase requires approval where amount_inr > 18000")
+    print("  - razorpay.purchase rate-limited to 3 calls/minute per agent")
 
 
 if __name__ == "__main__":

@@ -1,5 +1,5 @@
 [tool.uv.workspace]
-members = ["shared", "interceptor", "aggregator", "sdk-python", "demo-agent"]
+members = ["shared", "interceptor", "aggregator", "sdk-python", "demo-agent", "catalog"]
 
 [dependency-groups]
 dev = ["ruff>=0.8.4", "mypy>=1.13"]

@@ -10,6 +10,7 @@ resolution-markers = [
 [manifest]
 members = [
     "bastion-aggregator",
+    "bastion-catalog",
     "bastion-demo-agent",
     "bastion-interceptor",
     "bastion-sdk",
@@ -523,12 +524,39 @@ requires-dist = [
 provides-extras = ["dev"]
 
 [[package]]
+name = "bastion-catalog"
+version = "0.0.0"
+source = { editable = "catalog" }
+dependencies = [
+    { name = "fastapi" },
+    { name = "uvicorn", extra = ["standard"] },
+]
+
+[package.optional-dependencies]
+dev = [
+    { name = "httpx" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "fastapi", specifier = ">=0.115" },
+    { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.27" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.3" },
+    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.24" },
+    { name = "uvicorn", extras = ["standard"], specifier = ">=0.32" },
+]
+provides-extras = ["dev"]
+
+[[package]]
 name = "bastion-demo-agent"
 version = "0.0.0"
 source = { editable = "demo-agent" }
 dependencies = [
     { name = "asyncpg" },
     { name = "bastion-sdk" },
+    { name = "httpx" },
     { name = "opentelemetry-exporter-otlp-proto-http" },
     { name = "opentelemetry-sdk" },
     { name = "redis" },
@@ -546,6 +574,7 @@ requires-dist = [
     { name = "asyncpg", specifier = ">=0.29" },
     { name = "bastion-interceptor", marker = "extra == 'dev'", editable = "interceptor" },
     { name = "bastion-sdk", editable = "sdk-python" },
+    { name = "httpx", specifier = ">=0.27" },
     { name = "opentelemetry-exporter-otlp-proto-http", specifier = ">=1.27" },
     { name = "opentelemetry-sdk", specifier = ">=1.27" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.3" },

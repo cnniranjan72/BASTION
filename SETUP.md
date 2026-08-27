@@ -21,10 +21,28 @@ aspirational.
 
 ## Option 1: native dev
 
+Note: this option only brings up Postgres and Redis. The interceptor still starts fine
+without Kafka/MinIO — it retries MinIO for ~60-90s (a wall of stack traces, not a
+failure) then fails open, per U9's fix below — but the aggregator's lifespan requires
+Kafka unconditionally and will hard-crash (`KafkaConnectionError`, not a graceful
+degrade) without it. If you need the aggregator running, bring up Kafka/MinIO too
+(`docker compose -f infra/docker/docker-compose.yml up -d postgres redis kafka minio`)
+or use Option 2 below.
+
+**The outbox publisher (below) is not optional for a working Trace Explorer / live graph**, even
+though nothing above fails loudly without it. Skip it and `/intercept` still returns real
+allowed/blocked decisions — but nothing reaches Kafka, so the aggregator never folds new activity
+into `trace_summaries`, so Trace Explorer, Command Center, and the live graph silently show stale or
+empty data while individual `GET /traces/{id}` lookups keep working fine (a real, previously-
+undiscovered gap this session hit directly — `unpublished outbox rows` grew into the hundreds with
+both other services reporting healthy the whole time). Confirm it's actually draining with
+`uv run python -c "..."` against `outbox_events` if anything looks stale, not just `/healthz`.
+
 ```bash
 # Postgres (host :5442) + Redis (host :6389) — see docs/ARCHITECTURE.md §7/§19
-# for why neither is on its default port.
-docker compose -f infra/docker/docker-compose.yml up -d postgres redis
+# for why neither is on its default port. Kafka/MinIO too if you want the
+# aggregator and Trace Explorer actually working, not just the interceptor.
+docker compose -f infra/docker/docker-compose.yml up -d postgres redis kafka minio
 
 uv sync --all-packages --all-extras --dev
 uv run python infra/keys/generate_dev_keys.py
@@ -35,6 +53,8 @@ uv run --project demo-agent python -m demo_agent.seed   # Phase 8 demo agent + p
 # Each in its own terminal:
 uv run --project interceptor uvicorn bastion_interceptor.main:app --port 4001
 uv run --project aggregator uvicorn bastion_aggregator.main:app --port 4002
+uv run --project interceptor python -m bastion_interceptor.outbox_publisher   # see note above
+uv run --project catalog uvicorn bastion_catalog.main:app --port 4003   # Track 01: GET /catalog
 cd frontend && npm install && npm run dev        # http://localhost:5173
 ```
 
@@ -103,8 +123,8 @@ kubectl -n bastion port-forward svc/bastion-frontend 8080:8080
 ```bash
 uv run ruff check .
 uv run ruff format --check .
-uv run mypy shared/src interceptor/src aggregator/src sdk-python/bastion demo-agent/demo_agent
-uv run pytest shared/tests interceptor/tests aggregator/tests sdk-python/tests demo-agent/tests
+uv run mypy shared/src interceptor/src aggregator/src sdk-python/bastion demo-agent/demo_agent catalog/src
+uv run pytest shared/tests interceptor/tests aggregator/tests sdk-python/tests demo-agent/tests catalog/tests
 
 cd frontend && npm run typecheck && npm run lint
 ```

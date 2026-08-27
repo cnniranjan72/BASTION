@@ -129,7 +129,19 @@ jobs:
           done
       - run: uv run ruff check .
       - run: uv run ruff format --check .
-      - run: uv run mypy shared/src interceptor/src aggregator/src sdk-python/bastion demo-agent/demo_agent
+      - run: uv run mypy shared/src interceptor/src aggregator/src sdk-python/bastion demo-agent/demo_agent catalog/src
+      # Track 01: demo-agent's new purchase-scenario tests call
+      # razorpay_tools.fetch_catalog(), a real HTTP call to the catalog
+      # service (a separate FastAPI app, not swappable to ASGITransport
+      # like the interceptor calls elsewhere in this suite) — needs a real
+      # process up, same reasoning as MinIO above.
+      - name: Start catalog service
+        run: |
+          uv run --project catalog uvicorn bastion_catalog.main:app --port 4003 &
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:4003/healthz && break
+            sleep 1
+          done
       # U14's chaos suite (aggregator/tests/chaos/) drives real infra outages via
       # `docker stop`/`docker start` on the literal container names
       # `bastion-kafka`/`bastion-redis` from infra/docker/docker-compose.yml.
@@ -137,7 +149,7 @@ jobs:
       # stopping a shared service container mid-job isn't meaningful here
       # anyway) — this suite is real-infra-chaos-local-only by design, run via
       # `uv run pytest aggregator/tests/chaos` against docker-compose, not in CI.
-      - run: uv run pytest shared/tests interceptor/tests aggregator/tests sdk-python/tests demo-agent/tests --ignore=aggregator/tests/chaos
+      - run: uv run pytest shared/tests interceptor/tests aggregator/tests sdk-python/tests demo-agent/tests catalog/tests --ignore=aggregator/tests/chaos
 
   frontend:
     name: Frontend (typecheck, lint, test)

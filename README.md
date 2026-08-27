@@ -45,6 +45,72 @@ Connect the live dashboard to agent `44444444-4444-4444-4444-444444444444` and r
 blocked call turns red in the 3D execution graph in real time, over the same WebSocket push that drives
 every live trace, no polling anywhere in the path. Full setup: `SETUP.md`.
 
+## See it work: an AI buyer transacts, then goes rogue (Track 01)
+
+Everything above is governance — stopping a dangerous call. This is the other half of Track 01's bar:
+an agent that actually transacts. A tiny agent-readable merchant catalog (`catalog/`, `GET /catalog`,
+port `4003`) and a new `razorpay.purchase` tool, wired through the exact same
+`BastionClient.call()` → intercept → allow/block → `execute()` path `payments.transfer` already uses —
+no new SDK mechanism, no new policy engine code, two new rules on the existing demo policy
+(`demo-agent/demo_agent/seed.py`).
+
+**What's real and what's disclosed as simulated, stated plainly, not glossed over**: `GET /catalog` is
+real. Order creation (`razorpay.purchase`'s first step) has a real branch that activates the moment
+Razorpay test-mode credentials exist — untested against a live account in this build (getting a test-mode
+key currently requires a business PAN this project doesn't have), so treated with less confidence than
+the rest of this codebase's tested code, not presented as verified when it isn't. Payment *capture* is
+permanently simulated with no swap point at all, and not because of missing credentials: Razorpay's own
+Payments API can only retrieve or capture a payment that already exists — a payment can only originate
+through their hosted Checkout or client SDKs, never a pure backend script, regardless of credentials.
+Every receipt carries `"simulated": true/false` inline in the data itself
+(`demo-agent/demo_agent/razorpay_tools.py`), so the disclosure survives into `GET /traces/{id}` for
+anyone inspecting a real trace, not just this file.
+
+Scenario A, the revenue case — an AI buyer agent browses the catalog, picks an item, and completes a
+purchase:
+
+```bash
+uv run --project demo-agent python -m demo_agent.seed             # adds the two new rules below
+uv run --project demo-agent python -m demo_agent.run_purchase_demo --repeat 3
+```
+
+```
+[purchase 1] Wireless Earbuds Pro x1 -> simulated receipt: order=order_577a5f086ba642 payment=pay_35faeba45be24d amount=₹1499
+[purchase 2] Wireless Earbuds Pro x1 -> simulated receipt: order=order_c51afc402b244f payment=pay_eda2985bfb0149 amount=₹1499
+[purchase 3] Wireless Earbuds Pro x1 -> simulated receipt: order=order_b80b92b8809a4f payment=pay_fada58852b0848 amount=₹1499
+3/3 purchases completed successfully.
+```
+
+Scenario B, the anomaly case — the same two policy rules that let Scenario A through also catch an agent
+gone wrong. `razorpay.purchase` requires approval above ₹18,000 (3x the catalog's highest single-item
+price, verified as a real `pending_approval` decision in `interceptor/tests` rather than run live —
+resolving one live means either a real human or a ~25-60s fail-closed timeout with nobody there to
+approve it, a bad look on camera and not what "an agent gone wrong" is really about). What runs live
+instead is the rate limit: `razorpay.purchase` capped at 3 calls/minute per agent catches a rapid burst
+immediately, with the same audit-trail transparency as everything else here:
+
+```
+[burst 1] allowed
+[burst 2] allowed
+[burst 3] allowed
+[burst 4] BLOCKED (calls_per_minute limit 3 exceeded for tool 'razorpay.purchase')
+[burst 5] BLOCKED (calls_per_minute limit 3 exceeded for tool 'razorpay.purchase')
+[burst 6] BLOCKED (calls_per_minute limit 3 exceeded for tool 'razorpay.purchase')
+3 allowed, 3 blocked out of 6.
+```
+
+```json
+{"tool_name": "razorpay.purchase", "status": "blocked", "args": {"sku": "CHARGER-65W", "quantity": 1, "amount_inr": 899},
+ "reason": "calls_per_minute limit 3 exceeded for tool 'razorpay.purchase'"}
+```
+
+Scenario A and B share that exact same rate-limit budget on purpose — `run_purchase_demo.py`'s own
+`--repeat` self-paces with real waits when it needs more purchases than the limit allows in one window,
+rather than gaming or hiding the interaction. Both scenarios run against local/Docker Compose (SETUP.md),
+not the deployed production URL — the latency numbers two sections below are why; the new policy exists
+in this codebase and is ready to activate on the live org once that's revisited, not done unilaterally in
+this pass.
+
 ## Real numbers, not descriptive claims
 
 `POST /intercept` — the latency-critical hot path — under a 50 req/s constant-arrival-rate load test
@@ -562,7 +628,7 @@ Promoting a second owner first, then demoting the original, still works.
 
 ## Product surface
 
-Fourteen pages, each backed by real endpoints — not a mockup of a bigger product — plus a ⌘K command
+Fifteen pages, each backed by real endpoints — not a mockup of a bigger product — plus a ⌘K command
 palette with real actions (jump to any page/agent/trace, show blocked calls, show pending approvals,
 replay the last incident, create a policy) for navigating without touching the mouse. U15 built the 3
 flagship experiences; U16 built the remaining 7 supporting surfaces from `FRONTEND_V2.md` plus the
@@ -722,11 +788,12 @@ runs, and `aggregator/tests/conftest.py` drives the actual outbox → Kafka → 
 | Suite | What it proves |
 |---|---|
 | `shared/tests` | Event payloads; the call-state machine (`guard_event` / `state_for_event`); AES-256-GCM round-trip + fail-closed behavior for BYOK credentials (U17) |
-| `interceptor/tests` | Auth + RBAC, the authorization chain, policy engine + reconciliation + hot reload, approval flow, API tokens, agents, users, idempotency, causal ordering, circuit breaker + limits, outbox resumability, object storage, row-level security (incl. `llm_credentials`, U17), retention, health, LLM credential CRUD + the live-run endpoint's real-policy-block path and structured provider-error mapping (U17) |
+| `interceptor/tests` | Auth + RBAC, the authorization chain, policy engine + reconciliation + hot reload, approval flow, API tokens, agents, users, idempotency, causal ordering, circuit breaker + limits, outbox resumability, object storage, row-level security (incl. `llm_credentials`, U17), retention, health, LLM credential CRUD + the live-run endpoint's real-policy-block path and structured provider-error mapping (U17); Track 01's two `razorpay.purchase` rules — under-threshold allow, over-threshold `pending_approval`, rate-limit block, same reused policy mechanism as everything else in this row |
 | `aggregator/tests` | Kafka resumability (manual offset commit), WS fan-out + per-span delta coalescing, replay, the observability milestone (Jaeger REST query), health, U16's 5 analytics endpoints + trace filters against real policy-generated events |
 | `aggregator/tests/chaos` | Real-infra outage drills against the docker-compose stack only (`docker stop`/`start` on `bastion-kafka`, `bastion-redis`, …) — deliberately **not** run in CI |
 | `sdk-python/tests` | `/intercept` semantics end to end through `httpx.ASGITransport` |
-| `demo-agent/tests` | The injected transfer is blocked reliably 20/20 times; the legitimate under-threshold refund goes through |
+| `demo-agent/tests` | The injected transfer is blocked reliably 20/20 times; the legitimate under-threshold refund goes through; Track 01's purchase scenario returns a real (labeled) receipt and folds into the event log, the burst scenario hits the rate limit |
+| `catalog/tests` | `GET /catalog` and `GET /catalog/{sku}` return real seeded data; unknown sku is a clean 404 |
 | `frontend` (Vitest + React Testing Library, U17) | The client-side event fold (`foldEvents.ts`, a hand-ported twin of `graph.py`'s own fold — the exact kind of file that can silently drift); live-graph delta application (`store/graph.ts`, including the specific dropped-`reason` bug class `ARCHITECTURE.md` §17 found live); Incident Replay's playhead state machine (`store/replay.ts`); the auth store's JWT-decode-and-persist logic, including a corrupted-localStorage recovery path; the API client's 401→refresh→retry flow, concurrent-401 refresh deduplication, and error-body mapping (found and fixed a real latent crash here — see below); `LoginPage` and `AccountPage`'s LLM-key/live-demo flows against a mocked API client |
 
 **Real bug found writing the frontend suite, not just coverage added**: `api/client.ts`'s error handler did `body?.error.code` — the `?.` only guarded `body` being null, so any well-formed JSON error body that didn't happen to have BASTION's own `{error: {...}}` envelope shape (e.g. an intermediary's own error page, or just `{}`) threw an uncaught `TypeError` instead of the intended clean `ApiError` fallback. Fixed to `body?.error?.code`; the test that would have caught this is in `api/client.test.ts`.
@@ -735,8 +802,8 @@ Gates (all enforced in CI):
 
 ```bash
 uv run ruff check . && uv run ruff format --check .
-uv run mypy shared/src interceptor/src aggregator/src sdk-python/bastion demo-agent/demo_agent
-uv run pytest shared/tests interceptor/tests aggregator/tests sdk-python/tests demo-agent/tests
+uv run mypy shared/src interceptor/src aggregator/src sdk-python/bastion demo-agent/demo_agent catalog/src
+uv run pytest shared/tests interceptor/tests aggregator/tests sdk-python/tests demo-agent/tests catalog/tests
 (cd frontend && npm run typecheck && npm run lint && npm run test)
 ```
 
