@@ -8,8 +8,14 @@ import {
   ThreatIcon,
 } from "./icons";
 
+// Kept in sync by hand, not injected at build time (a cross-language pytest+Vitest
+// counter was judged not worth the added build-time failure surface this close to
+// submission). Source of truth: `uv run pytest shared/tests interceptor/tests
+// aggregator/tests sdk-python/tests demo-agent/tests catalog/tests` (266) +
+// `cd frontend && npm run test -- --run` (66) = 332. Must match README.md's opening
+// table and docs/PITCH_BRIEF.md — if you change one, change all three.
 const PROOF_POINTS = [
-  { value: "266", label: "tests passing, real Postgres/Redis/Kafka — not mocks" },
+  { value: "332", label: "tests passing — 266 against real Postgres/Redis/Kafka, 66 frontend" },
   { value: "0", label: "dangerous calls that ever reach a real API — blocked before execute()" },
   { value: "3", label: "new policy rules, zero changes to the policy engine itself" },
 ];

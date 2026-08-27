@@ -1,7 +1,7 @@
 import { useRef, useState } from "react";
 import { useFrame } from "@react-three/fiber";
 import { Html } from "@react-three/drei";
-import type { Mesh } from "three";
+import type { Mesh, MeshStandardMaterial } from "three";
 import { useGraphStore } from "../../store/graph";
 import { NODE_STATUS_LABEL } from "../../lib/labels";
 import { colorForStatus, isTransient, radiusForNode } from "./encoding";
@@ -9,6 +9,18 @@ import { useSimulationRegistry } from "./SimulationContext";
 
 interface NodeMeshProps {
   spanId: string;
+}
+
+// A policy decision landing is the single most demo-able moment in this
+// whole system -- it needs to read as an event, not a static red ball
+// someone has to already be staring at to notice. BLOCK_FLASH_SECONDS is
+// how long the transition-into-blocked/failed gets a decaying ring-out
+// pulse + emissive spike, layered on top of (not replacing) the steady
+// color-coding encoding.ts already does.
+const BLOCK_FLASH_SECONDS = 1.1;
+
+function isBlockedLike(status: string | null): boolean {
+  return status === "blocked" || status === "failed";
 }
 
 /** Subscribes to only *this* node's slice of the store — a status/cost
@@ -21,7 +33,10 @@ export function NodeMesh({ spanId }: NodeMeshProps) {
   const selectNode = useGraphStore((s) => s.selectNode);
   const { simNodes } = useSimulationRegistry();
   const meshRef = useRef<Mesh>(null);
+  const materialRef = useRef<MeshStandardMaterial>(null);
   const pulseRef = useRef(0);
+  const prevStatusRef = useRef<string | null>(null);
+  const flashElapsedRef = useRef(Number.POSITIVE_INFINITY);
   const [hovered, setHovered] = useState(false);
 
   useFrame((_state, delta) => {
@@ -42,12 +57,34 @@ export function NodeMesh({ spanId }: NodeMeshProps) {
       mesh.position.set(x, y, z);
     }
 
+    // Arm the flash the instant a node crosses into blocked/failed — not on
+    // every frame it happens to already be blocked (a replay scrub landing
+    // mid-trace would otherwise flash every node on screen at once).
+    if (node && node.status !== prevStatusRef.current) {
+      if (isBlockedLike(node.status) && !isBlockedLike(prevStatusRef.current)) {
+        flashElapsedRef.current = 0;
+      }
+      prevStatusRef.current = node.status;
+    }
+
+    const restingIntensity = spanId === selectedSpanId || hovered ? 1.1 : 0.45;
     if (node && isTransient(node.status)) {
       pulseRef.current += delta * 4;
       const pulse = 1 + Math.sin(pulseRef.current) * 0.08;
       mesh.scale.setScalar(pulse);
+      if (materialRef.current) materialRef.current.emissiveIntensity = restingIntensity;
+    } else if (flashElapsedRef.current < BLOCK_FLASH_SECONDS) {
+      flashElapsedRef.current += delta;
+      const t = Math.min(flashElapsedRef.current / BLOCK_FLASH_SECONDS, 1);
+      const decay = 1 - t;
+      // A fast decaying ring-out (5 half-cycles collapsing to 0), distinct
+      // from the steady in-flight pulse above — reads as "this just
+      // happened" rather than "this is still working."
+      mesh.scale.setScalar(1 + Math.sin(t * Math.PI * 5) * 0.35 * decay);
+      if (materialRef.current) materialRef.current.emissiveIntensity = restingIntensity + decay * 2.2;
     } else {
       mesh.scale.setScalar(1);
+      if (materialRef.current) materialRef.current.emissiveIntensity = restingIntensity;
     }
   });
 
@@ -77,6 +114,7 @@ export function NodeMesh({ spanId }: NodeMeshProps) {
     >
       <sphereGeometry args={[radius, 24, 24]} />
       <meshStandardMaterial
+        ref={materialRef}
         color={color}
         emissive={color}
         emissiveIntensity={isSelected || hovered ? 1.1 : 0.45}
@@ -104,6 +142,23 @@ export function NodeMesh({ spanId }: NodeMeshProps) {
       >
         <div className="node-label">{node.tool_name}</div>
       </Html>
+
+      {/* Always-on, not hover-gated: the whole point of task 2's fix is that
+          the reason a call was stopped shouldn't require finding this exact
+          node in a moving 3D scene and hovering it precisely. Suppressed
+          while hovered so it doesn't double up with the richer tooltip
+          below, which already includes the same reason line. */}
+      {!hovered && node.reason && (node.status === "blocked" || node.status === "failed") && (
+        <Html
+          position={[0, radius + 0.25, 0]}
+          center
+          distanceFactor={9}
+          zIndexRange={[1, 0]}
+          style={{ pointerEvents: "none" }}
+        >
+          <div className={`node-reason-chip node-reason-chip--${node.status}`}>{node.reason}</div>
+        </Html>
+      )}
 
       {hovered && (
         <Html
