@@ -4,6 +4,7 @@ import { api, ApiError } from "../api/client";
 import { useLiveGraph } from "../hooks/useLiveGraph";
 import { TRACE_STATUS_LABEL } from "../lib/labels";
 import { GraphCanvas } from "./GraphView/GraphCanvas";
+import { GraphErrorBoundary } from "./GraphView/GraphErrorBoundary";
 import { GraphLegend } from "./GraphView/GraphLegend";
 import { TimelineStrip } from "./GraphView/TimelineStrip";
 import { InspectorPanel } from "./InspectorPanel";
@@ -130,10 +131,10 @@ export function Dashboard() {
                 )}
               </div>
             ) : (
-              <>
+              <GraphErrorBoundary>
                 <GraphCanvas />
                 <GraphLegend />
-              </>
+              </GraphErrorBoundary>
             )}
           </main>
           {agentId && <TimelineStrip />}

@@ -97,8 +97,21 @@ export function ForceGraph() {
     }
     simulation.nodes(Array.from(simNodes.values()));
 
+    // A real, production-found crash, not theoretical: d3-force-3d's link
+    // force does its own internal node lookup by id and throws
+    // synchronously ("node not found: <id>") if an edge references one
+    // that was never added as a node -- e.g. a resync burst whose parent
+    // span was never itself recorded as a completed event. That throw
+    // happens inside this effect, which react-three-fiber runs as part of
+    // React's own render/commit cycle -- with no error boundary around
+    // the graph, it doesn't just fail this one edge, it unmounts the
+    // *entire* app (confirmed: the whole #root emptied, not just the
+    // Canvas). Filtering to edges whose both ends are real nodes is the
+    // same defensive posture NodeMesh.tsx already takes for NaN
+    // positions -- drop the bad data, don't let it take the page down.
     const linkForce = simulation.force("link") as ReturnType<typeof forceLink<SimNode, SimLink>>;
-    linkForce.links(edges.map((e) => ({ source: e.from, target: e.to })));
+    const validEdges = edges.filter((e) => simNodes.has(e.from) && simNodes.has(e.to));
+    linkForce.links(validEdges.map((e) => ({ source: e.from, target: e.to })));
 
     simulation.alpha(0.6).restart();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on stable string forms, not the raw arrays

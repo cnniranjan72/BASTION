@@ -5,6 +5,7 @@ import { useGraphStore } from "../../store/graph";
 import { useReplayStore } from "../../store/replay";
 import { foldEventsToGraph } from "../../lib/foldEvents";
 import { GraphCanvas } from "../GraphView/GraphCanvas";
+import { GraphErrorBoundary } from "../GraphView/GraphErrorBoundary";
 import { GraphLegend } from "../GraphView/GraphLegend";
 import { InspectorPanel } from "../InspectorPanel";
 import { TopBar } from "../TopBar";
@@ -98,10 +99,10 @@ export function IncidentReplayPage() {
             ) : events.length === 0 ? (
               <div className="graph-area__placeholder">Loading trace…</div>
             ) : (
-              <>
+              <GraphErrorBoundary>
                 <GraphCanvas />
                 <GraphLegend />
-              </>
+              </GraphErrorBoundary>
             )}
           </main>
           <ReplayTimeline />
