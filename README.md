@@ -106,10 +106,11 @@ immediately, with the same audit-trail transparency as everything else here:
 
 Scenario A and B share that exact same rate-limit budget on purpose — `run_purchase_demo.py`'s own
 `--repeat` self-paces with real waits when it needs more purchases than the limit allows in one window,
-rather than gaming or hiding the interaction. Both scenarios run against local/Docker Compose (SETUP.md),
-not the deployed production URL — the latency numbers two sections below are why; the new policy exists
-in this codebase and is ready to activate on the live org once that's revisited, not done unilaterally in
-this pass.
+rather than gaming or hiding the interaction. The recorded output above is from local/Docker Compose
+(SETUP.md), not the deployed production URL — the latency numbers two sections below are why a live
+recording targets local. The catalog service and both new policy rules are, separately, also live in
+production now (`bastion-catalog.onrender.com`, `GET /catalog`) — activated and verified against the real
+deployed interceptor the same way the numbers below were: a real `POST /intercept` call, not a claim.
 
 ## Real numbers, not descriptive claims
 
@@ -722,15 +723,16 @@ nothing.
 
 ## Services at a glance
 
-The Python workspace is a single `uv` project with five members (`pyproject.toml` `[tool.uv.workspace]`):
-`interceptor` and `aggregator` run as servers, `shared` and `sdk-python` are libraries, and `demo-agent`
-is a reference CLI. `frontend` is a separate npm/Vite app; `outbox_publisher` is a standalone process
-shipped in the interceptor image.
+The Python workspace is a single `uv` project with six members (`pyproject.toml` `[tool.uv.workspace]`):
+`interceptor`, `aggregator`, and `catalog` run as servers, `shared` and `sdk-python` are libraries, and
+`demo-agent` is a reference CLI. `frontend` is a separate npm/Vite app; `outbox_publisher` is a standalone
+process shipped in the interceptor image.
 
 | Service | Package | Port(s) | What it does |
 |---|---|---|---|
 | **interceptor** | `interceptor/` (`bastion_interceptor`) | `4001` | The hot path + control-plane API: `/intercept`, `/spans/{id}/complete`, auth/sessions, teams, agents, policies, approvals, PATs |
 | **aggregator** | `aggregator/` (`bastion_aggregator`) | `4002` | Consumes `tool-events`, folds the causal graph, serves `GET /traces*` and the live `WS /live/{agent_id}` |
+| **catalog** | `catalog/` (`bastion_catalog`) | `4003` | Track 01: `GET /catalog` — a real, standalone, agent-readable merchant product list. Deployed to production (`bastion-catalog.onrender.com`), no governance-core dependency |
 | **frontend** | `frontend/` (`@bastion/frontend`) | `5173` dev / `8080` (nginx) | React 19 SPA: 3D live execution graph, incident replay, Policy Studio, approvals inbox, analytics |
 | **outbox_publisher** | process in the interceptor image | — | Separate process by design (ADR-003): drains `outbox_events` to Kafka `tool-events`. Docker Compose runs it as its own `outbox-publisher` service; a deployment with no background-worker tier available (`RUN_OUTBOX_PUBLISHER_EMBEDDED=true`) instead runs it as a background task inside the interceptor's own process — see "Deploying this for real" above |
 | **sdk-python** | `sdk-python/` (`bastion-sdk`) | — | `BastionClient.call()` — the gateway every agent routes tool calls through |
