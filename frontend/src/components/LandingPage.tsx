@@ -199,8 +199,12 @@ export function LandingPage() {
 
       <section className="landing__final-cta">
         <ThreatIcon className="landing__final-cta-icon" width={28} height={28} />
-        <h2>Sign up, connect an agent, watch it live.</h2>
-        <p>No credit card, no sales call — a real org, a real policy, in under a minute.</p>
+        <h2>Bring your own agent, watch it live.</h2>
+        <p>
+          No credit card, no sales call — a real org and a real policy, set up in under a minute.
+          Don't have an agent to connect yet? <Link to="/demo">See a real one work right now</Link>{" "}
+          instead.
+        </p>
         <Link to="/signup" className="btn btn--primary btn--lg">
           Create your organization
         </Link>
