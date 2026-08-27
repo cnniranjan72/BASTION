@@ -118,8 +118,8 @@ export function TracesPage() {
         <div className="page__header">
           <h1>Trace Explorer</h1>
           <p className="page__subtitle">
-            Every trace BASTION has recorded, searchable and filterable by agent, status, tool,
-            policy, and time — pick one to replay its full causal graph.
+            The audit trail — every trace BASTION has recorded, searchable and filterable by
+            agent, status, tool, policy, and time — pick one to replay its full causal graph.
           </p>
         </div>
 

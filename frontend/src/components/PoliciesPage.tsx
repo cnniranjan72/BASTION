@@ -110,8 +110,8 @@ export function PoliciesPage() {
         <div className="page__header">
           <h1>Policies</h1>
           <p className="page__subtitle">
-            Versioned, never edited in place — activating a version hot-reloads every running
-            interceptor with no restart.
+            What bounds and gates every agent action — versioned, never edited in place —
+            activating a version hot-reloads every running interceptor with no restart.
           </p>
         </div>
 
