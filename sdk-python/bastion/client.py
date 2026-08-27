@@ -105,7 +105,7 @@ class BastionClient:
             # approved, or raises BastionBlockedError for denied/timed_out/
             # this client's own budget exceeded — approved is the only path
             # that reaches the execute() call below.
-            await self._wait_for_approval(body["poll_url"])
+            await self._wait_for_approval(body["poll_url"], span_id=UUID(body["span_id"]))
 
         span_id = UUID(body["span_id"])
         token = set_current_span(SpanContext(trace_id=trace_id, span_id=span_id))
@@ -149,11 +149,24 @@ class BastionClient:
         assert last_error is not None
         raise last_error
 
-    async def _wait_for_approval(self, poll_url: str) -> None:
+    async def _wait_for_approval(self, poll_url: str, *, span_id: UUID) -> None:
+        """Timeouts already failed closed (below); a transport error
+        (connection reset, DNS blip) mid-poll did not — it raised a raw
+        httpx exception instead of the documented fail-closed guarantee.
+        Found during a Track 01 audit follow-up, not hypothetical: this is
+        the one real gap between what this method's own timeout branch
+        promises and what actually happened on a network failure
+        specifically. Fixed the same way the timeout branch already
+        handles "we don't know the outcome, so don't run execute()"."""
         deadline = time.monotonic() + self._approval_max_wait
         while True:
-            response = await self._http.get(poll_url)
-            response.raise_for_status()
+            try:
+                response = await self._http.get(poll_url)
+                response.raise_for_status()
+            except httpx.TransportError as exc:
+                raise BastionBlockedError(
+                    reason=f"approval poll failed: {exc}", span_id=span_id, policy_id=None
+                ) from exc
             body = response.json()
             status = body["status"]
 
