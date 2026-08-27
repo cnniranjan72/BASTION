@@ -11,9 +11,7 @@ from pathlib import Path
 
 from PIL import Image
 
-SRC_DIR = Path(
-    r"C:\Users\cnnir\AppData\Local\Temp\claude-chrome-screenshots-Hd138j"
-)
+SRC_DIR = Path(r"C:\Users\cnnir\AppData\Local\Temp\claude-chrome-screenshots-Hd138j")
 FRAMES = [
     "screenshot-1787834421095-0.jpg",  # inspector open, real span detail
     "screenshot-1787834471596-1.jpg",  # inspector closed, live graph
