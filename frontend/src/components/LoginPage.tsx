@@ -3,6 +3,7 @@ import type { FormEvent } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api, ApiError } from "../api/client";
 import { useAuthStore } from "../store/auth";
+import { AmbientGraphBackground } from "./AmbientGraphBackground";
 
 export function LoginPage() {
   const setTokens = useAuthStore((s) => s.setTokens);
@@ -29,6 +30,7 @@ export function LoginPage() {
 
   return (
     <div className="login-page">
+      <AmbientGraphBackground />
       <form className="login-card" onSubmit={handleSubmit}>
         <h1>BASTION</h1>
         <p className="login-card__subtitle">AI agent control plane</p>

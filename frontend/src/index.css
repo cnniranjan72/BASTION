@@ -295,8 +295,18 @@ a {
     radial-gradient(600px circle at 20% 20%, rgba(56, 189, 248, 0.08), transparent 60%),
     radial-gradient(500px circle at 80% 75%, rgba(167, 139, 250, 0.08), transparent 60%), var(--bg);
 }
+.ambient-graph-bg {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+}
+.ambient-graph-bg canvas {
+  display: block;
+}
 .login-card {
   position: relative;
+  z-index: 1;
   display: flex;
   flex-direction: column;
   gap: 0.6rem;
