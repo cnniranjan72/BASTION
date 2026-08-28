@@ -40,9 +40,19 @@ export function CatalogPage() {
 
         {error && <p className="page__error">{error}</p>}
 
+        {/* Reproduced live, twice: a genuine fetch failure (Bad Gateway, or a
+            slow Render free-tier cold start) left `items` at its initial []
+            and previously fell straight into the "Catalog is empty" empty
+            state below the error banner -- a real error and a false "this
+            is just empty, nothing's wrong" message rendered at the same
+            time. Same root cause OverviewPage.tsx already fixed (a fetch
+            outcome collapsed into only two states -- loading vs "loaded" --
+            instead of three: loading, failed, or genuinely empty). `error
+            ? null` keeps the error banner as the only thing shown on
+            failure. */}
         {loading ? (
           <TableSkeleton />
-        ) : items.length === 0 ? (
+        ) : error ? null : items.length === 0 ? (
           <EmptyState icon={EmptyBoxIcon} title="Catalog is empty">
             The catalog service has no items seeded yet.
           </EmptyState>
