@@ -11,6 +11,7 @@ import {
   ApprovalsIcon,
   CostIcon,
   DocsIcon,
+  EmptyBoxIcon,
   GraphIcon,
   OverviewIcon,
   PoliciesIcon,
@@ -48,6 +49,7 @@ const NAV_GROUPS: Array<{
       { to: "/agents", label: "Agents", icon: AgentsIcon },
       { to: "/policies", label: "Policies", icon: PoliciesIcon },
       { to: "/policy-studio", label: "Simulator", icon: PoliciesIcon },
+      { to: "/catalog", label: "Catalog", icon: EmptyBoxIcon },
     ],
   },
   {

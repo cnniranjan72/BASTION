@@ -456,8 +456,8 @@ a {
   position: relative;
   display: flex;
   align-items: center;
-  gap: 0.35rem;
-  padding: 0.4rem 0.55rem;
+  gap: 0.3rem;
+  padding: 0.4rem 0.45rem;
   border-radius: var(--radius-sm);
   font-size: 0.78rem;
   color: var(--text-dim);
@@ -505,8 +505,8 @@ a {
   gap: 0.2rem;
 }
 .topbar__nav-group:not(:first-child) {
-  padding-left: 0.35rem;
-  margin-left: 0.2rem;
+  padding-left: 0.3rem;
+  margin-left: 0.15rem;
   border-left: 1px solid var(--border);
 }
 .topbar__nav-group-label {

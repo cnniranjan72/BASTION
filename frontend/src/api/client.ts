@@ -4,6 +4,7 @@ import type {
   AgentHealth,
   ApiToken,
   ApprovalRequest,
+  CatalogItem,
   CommandCenterSnapshot,
   CostSummary,
   CreateAgentResponse,
@@ -31,6 +32,7 @@ import type {
 // proxy path prefixes.
 const INTERCEPTOR_BASE = "/api/interceptor";
 const AGGREGATOR_BASE = "/api/aggregator";
+const CATALOG_BASE = "/api/catalog";
 
 export class ApiError extends Error {
   constructor(
@@ -219,6 +221,10 @@ export const api = {
   // Center, `docs/adr/ADR-021`.
   getThreats: (windowDays = 30) =>
     request<ThreatSummary>(AGGREGATOR_BASE, `/threats?window_days=${windowDays}`),
+  // Track 01: the agent-readable merchant catalog the buyer demo (and
+  // razorpay.purchase itself) reads from — GET /catalog, unauthenticated
+  // on the catalog service's own side, no governance-core dependency.
+  listCatalog: () => request<CatalogItem[]>(CATALOG_BASE, "/catalog"),
   getAgentHealth: (agentId: string, windowDays = 30) =>
     request<AgentHealth>(AGGREGATOR_BASE, `/agents/${agentId}/health?window_days=${windowDays}`),
   getCosts: (windowDays = 30) =>

@@ -18,6 +18,13 @@ export default defineConfig({
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api\/aggregator/, ""),
       },
+      // Track 01: agent-readable merchant catalog — standalone service, no
+      // governance-core dependency (see catalog/src/bastion_catalog).
+      "/api/catalog": {
+        target: "http://localhost:4003",
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api\/catalog/, ""),
+      },
       "/ws/live": {
         target: "ws://localhost:4002",
         ws: true,

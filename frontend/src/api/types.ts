@@ -127,6 +127,15 @@ export interface TraceSummary {
   ended_at: string | null;
 }
 
+// Track 01: catalog/src/bastion_catalog/data.py's CatalogItem, unchanged.
+export interface CatalogItem {
+  sku: string;
+  name: string;
+  price_inr: number;
+  description: string;
+  stock: number;
+}
+
 export interface RawEvent {
   event_id: string;
   trace_id: string;

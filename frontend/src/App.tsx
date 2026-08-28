@@ -6,6 +6,7 @@ import { PublicDemoPage } from "./components/PublicDemoPage";
 import { OverviewPage } from "./components/OverviewPage";
 import { Dashboard } from "./components/Dashboard";
 import { AgentsPage } from "./components/AgentsPage";
+import { CatalogPage } from "./components/CatalogPage";
 import { AgentHealthPage } from "./components/AgentHealthPage";
 import { PoliciesPage } from "./components/PoliciesPage";
 import { ApprovalsPage } from "./components/ApprovalsPage";
@@ -93,6 +94,14 @@ export function App() {
           element={
             <RequireAuth>
               <PoliciesPage />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/catalog"
+          element={
+            <RequireAuth>
+              <CatalogPage />
             </RequireAuth>
           }
         />

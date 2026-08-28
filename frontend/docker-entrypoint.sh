@@ -10,6 +10,7 @@ set -e
 # needs a plain internal address, hence the http:// default here.
 : "${INTERCEPTOR_UPSTREAM:=http://interceptor:4001}"
 : "${AGGREGATOR_UPSTREAM:=http://aggregator:4002}"
+: "${CATALOG_UPSTREAM:=http://catalog:4003}"
 
 # Whatever DNS server this container is already configured to use — reused
 # for nginx's own `resolver` directive (see nginx.conf) instead of
@@ -23,6 +24,7 @@ RESOLVER=$(awk '/^nameserver/ {print $2; exit}' /etc/resolv.conf)
 sed -i \
     -e "s|__INTERCEPTOR_UPSTREAM__|${INTERCEPTOR_UPSTREAM}|g" \
     -e "s|__AGGREGATOR_UPSTREAM__|${AGGREGATOR_UPSTREAM}|g" \
+    -e "s|__CATALOG_UPSTREAM__|${CATALOG_UPSTREAM}|g" \
     -e "s|__RESOLVER__|${RESOLVER}|g" \
     /etc/nginx/conf.d/default.conf
 
