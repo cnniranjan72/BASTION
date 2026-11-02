@@ -19,6 +19,11 @@ def configure_logging() -> None:
             structlog.contextvars.merge_contextvars,
             structlog.processors.add_log_level,
             structlog.processors.TimeStamper(fmt="iso"),
+            # JSONRenderer can't serialize exc_info itself: without this,
+            # every log.exception() in production logged "exc_info": true
+            # and dropped the actual error. ConsoleRenderer formats it on
+            # its own, so dev output is unchanged.
+            *([structlog.processors.format_exc_info] if config.env == "production" else []),
             structlog.processors.JSONRenderer()
             if config.env == "production"
             else structlog.dev.ConsoleRenderer(),
