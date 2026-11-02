@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from contextlib import suppress
 from typing import Any
 
 import asyncpg
@@ -93,8 +94,30 @@ class OutboxPublisher:
         log.info("outbox batch published", count=len(published_ids))
         return len(published_ids)
 
+    async def _start_with_retry(self, *, max_backoff: float = 30.0) -> None:
+        """Kafka being unreachable when this process starts (a managed
+        cluster that's down, paused, or deleted) used to kill this task for
+        the rest of the process's life — the backlog then only drained on
+        the next redeploy. Retrying here keeps the same at-least-once
+        guarantee: rows stay `published_at IS NULL` until a send succeeds."""
+        backoff = 1.0
+        while True:
+            try:
+                await self.start()
+                return
+            except Exception as exc:
+                with suppress(Exception):
+                    await self.stop()
+                log.warning(
+                    "outbox publisher could not connect to kafka, retrying",
+                    error=str(exc),
+                    retry_in_seconds=backoff,
+                )
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, max_backoff)
+
     async def run_forever(self, *, poll_interval: float = 0.2) -> None:
-        await self.start()
+        await self._start_with_retry()
         try:
             while True:
                 try:

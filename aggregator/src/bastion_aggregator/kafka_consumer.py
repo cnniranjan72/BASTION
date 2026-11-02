@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import Awaitable, Callable
+from contextlib import suppress
 from typing import Any
 
 import structlog
@@ -38,6 +39,7 @@ class KafkaEventConsumer:
         self._auto_offset_reset = auto_offset_reset
         self._consumer: AIOKafkaConsumer | None = None
         self._task: asyncio.Task[None] | None = None
+        self._connect_task: asyncio.Task[None] | None = None
 
     async def start(self, on_notification: NotificationHandler) -> None:
         self._consumer = AIOKafkaConsumer(
@@ -56,6 +58,41 @@ class KafkaEventConsumer:
         )
         await self._consumer.start()
         self._task = asyncio.create_task(self._consume(on_notification))
+
+    def start_in_background(
+        self, on_notification: NotificationHandler, *, max_backoff: float = 30.0
+    ) -> None:
+        """What main.py's lifespan uses instead of awaiting start() directly:
+        an unreachable Kafka used to fail app startup outright, taking every
+        HTTP endpoint down with it (all of which read Postgres, never Kafka).
+        Now the service comes up regardless and live WS deltas start flowing
+        once Kafka is reachable — committed offsets mean nothing is skipped."""
+        self._connect_task = asyncio.create_task(
+            self._start_with_retry(on_notification, max_backoff)
+        )
+
+    async def _start_with_retry(
+        self, on_notification: NotificationHandler, max_backoff: float
+    ) -> None:
+        backoff = 1.0
+        while True:
+            try:
+                await self.start(on_notification)
+                log.info("kafka consumer started", group_id=self._group_id)
+                return
+            except Exception as exc:
+                if self._consumer is not None:
+                    with suppress(Exception):
+                        await self._consumer.stop()
+                    self._consumer = None
+                log.warning(
+                    "kafka consumer could not connect, retrying",
+                    group_id=self._group_id,
+                    error=str(exc),
+                    retry_in_seconds=backoff,
+                )
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, max_backoff)
 
     async def _consume(self, on_notification: NotificationHandler) -> None:
         assert self._consumer is not None
@@ -86,6 +123,11 @@ class KafkaEventConsumer:
             await self._consumer.commit()
 
     async def stop(self) -> None:
+        if self._connect_task is not None:
+            self._connect_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await self._connect_task
+            self._connect_task = None
         if self._task is not None:
             self._task.cancel()
             self._task = None

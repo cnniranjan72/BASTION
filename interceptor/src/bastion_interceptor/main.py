@@ -219,7 +219,10 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     finally:
         if outbox_publisher_task is not None:
             outbox_publisher_task.cancel()
-            with suppress(asyncio.CancelledError):
+            # Exception too, not just CancelledError: if the task already
+            # died on its own, awaiting it re-raises that error and turns a
+            # clean shutdown into "Application shutdown failed".
+            with suppress(asyncio.CancelledError, Exception):
                 await outbox_publisher_task
         await policy_reconciler.stop()
         await redis_bus.close()

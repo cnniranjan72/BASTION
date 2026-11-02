@@ -192,7 +192,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     # since a notification can arrive (and call ws_manager.broadcast(),
     # which publishes) as soon as the consumer starts.
     await redis_bus.connect()
-    await kafka_consumer.start(_handle_notification)
+    kafka_consumer.start_in_background(_handle_notification)
     try:
         yield
     finally:

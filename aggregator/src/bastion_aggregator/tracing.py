@@ -42,13 +42,18 @@ def configure_tracing(app: FastAPI, *, service_name: str) -> None:
         # U13 CI-fix/perf follow-up: mirrors interceptor/tracing.py's same
         # change -- see that module's comment for the real profiling
         # evidence behind it.
-        provider.add_span_processor(
-            BatchSpanProcessor(
-                OTLPSpanExporter(endpoint=f"{config.otel_exporter_otlp_endpoint}/v1/traces"),
-                max_export_batch_size=config.otel_max_export_batch_size,
-                schedule_delay_millis=config.otel_schedule_delay_millis,
+        # OTEL_EXPORTER_OTLP_ENDPOINT=none (or empty) for deploys with no
+        # collector (Render): spans are still created for in-process context
+        # propagation (incl. across Kafka), just never exported -- otherwise
+        # the exporter retries localhost:4319 forever and floods the logs.
+        if config.otel_exporter_otlp_endpoint.lower() not in ("", "none"):
+            provider.add_span_processor(
+                BatchSpanProcessor(
+                    OTLPSpanExporter(endpoint=f"{config.otel_exporter_otlp_endpoint}/v1/traces"),
+                    max_export_batch_size=config.otel_max_export_batch_size,
+                    schedule_delay_millis=config.otel_schedule_delay_millis,
+                )
             )
-        )
         trace.set_tracer_provider(provider)
         AsyncPGInstrumentor().instrument()  # type: ignore[no-untyped-call]
         _configured = True
